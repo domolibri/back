@@ -1,0 +1,41 @@
+# Ignore Visual Studio temporary files, build results, and caches
+**/[Bb]in/
+**/[Oo]bj/
+**/[Rr]elease/
+**/[Dd]ebug/
+**/[Pp]ublish/
+**/[Ww]eb/[Rr]elease/
+**/[Ww]eb/[Dd]ebug/
+
+# Ignore other common temporary files
+*.vs
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Ignore Resharper files
+*_ReSharper*/
+*.[Rr]esharper
+*.DotSettings.user
+
+# Ignore Rider files
+.idea/
+*.sln.iml
+
+# Ignore log files and databases
+*.log
+*.mdf
+*.ldf
+
+# Ignore packages
+**/packages/*
+!**/packages/repositories.config
+
+# Ignore files that can be recreated
+project.lock.json
+project.assets.json
+
+# Ignore secrets
+secrets.json
+appsettings.Development.json
