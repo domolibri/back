@@ -1,11 +1,33 @@
+using System.ComponentModel.DataAnnotations;
 using DomoLibri.Application.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace DomoLibri.Api.Controllers.Onboarding;
 
-// DTOs for the requests
-public record RegisterRequest(string NomeEditora, string EmailAdmin, string Senha, string NomeAdmin);
-public record LoginRequest(string Email, string Senha);
+public record RegisterRequest(
+    [Required(ErrorMessage = "Nome da editora é obrigatório.")]
+    [MinLength(2, ErrorMessage = "Nome da editora deve ter pelo menos 2 caracteres.")]
+    string NomeEditora,
+
+    [Required(ErrorMessage = "E-mail é obrigatório.")]
+    [EmailAddress(ErrorMessage = "Informe um e-mail válido.")]
+    string EmailAdmin,
+
+    [Required(ErrorMessage = "Senha é obrigatória.")]
+    [MinLength(6, ErrorMessage = "Senha deve ter pelo menos 6 caracteres.")]
+    string Senha,
+
+    [Required(ErrorMessage = "Nome do administrador é obrigatório.")]
+    [MinLength(2, ErrorMessage = "Nome deve ter pelo menos 2 caracteres.")]
+    string NomeAdmin);
+
+public record LoginRequest(
+    [Required(ErrorMessage = "E-mail é obrigatório.")]
+    [EmailAddress(ErrorMessage = "Informe um e-mail válido.")]
+    string Email,
+
+    [Required(ErrorMessage = "Senha é obrigatória.")]
+    string Senha);
 
 [ApiController]
 [Route("api/[controller]")]
@@ -41,7 +63,11 @@ public class AuthController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return Conflict(new { Message = ex.Message });
+            return Problem(
+                detail: ex.Message,
+                statusCode: StatusCodes.Status409Conflict,
+                title: "Conflito.",
+                type: "https://tools.ietf.org/html/rfc7807");
         }
     }
 
