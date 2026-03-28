@@ -1,6 +1,7 @@
 using DomoLibri.Application.Services;
 using DomoLibri.Infrastructure.Services;
 using DomoLibri.Infrastructure.Data;
+using DomoLibri.Api;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -14,7 +15,20 @@ builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddProblemDetails();
+builder.Services.AddProblemDetails(options =>
+{
+    // RFC 9457 §3: applies to all ProblemDetails produced by ASP.NET Core infrastructure
+    // (e.g. 401, 403, 404 from middleware). Controller-produced Problem() calls are
+    // handled individually below.
+    options.CustomizeProblemDetails = ctx =>
+    {
+        var status = ctx.ProblemDetails.Status ?? StatusCodes.Status500InternalServerError;
+        ctx.ProblemDetails.Type     = ProblemDetailsHelper.GetTypeUri(status);
+        ctx.ProblemDetails.Title    ??= ProblemDetailsHelper.GetTitle(status);
+        ctx.ProblemDetails.Instance ??= ctx.HttpContext.Request.Path;
+        ctx.ProblemDetails.Extensions["traceId"] = ctx.HttpContext.TraceIdentifier;
+    };
+});
 
 builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
@@ -22,11 +36,13 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
     {
         var problemDetails = new ValidationProblemDetails(context.ModelState)
         {
-            Status = StatusCodes.Status400BadRequest,
-            Title = "Erro de validação.",
-            Detail = "Um ou mais campos estão inválidos.",
-            Type = "https://tools.ietf.org/html/rfc7807"
+            Type     = ProblemDetailsHelper.GetTypeUri(400),
+            Title    = ProblemDetailsHelper.GetTitle(400),
+            Status   = StatusCodes.Status400BadRequest,
+            Detail   = "Um ou mais campos estão inválidos.",
+            Instance = context.HttpContext.Request.Path
         };
+        problemDetails.Extensions["traceId"] = context.HttpContext.TraceIdentifier;
         return new BadRequestObjectResult(problemDetails)
         {
             ContentTypes = { "application/problem+json" }
@@ -73,13 +89,18 @@ app.UseExceptionHandler(exApp =>
     {
         context.Response.StatusCode = StatusCodes.Status500InternalServerError;
         context.Response.ContentType = "application/problem+json";
-        await context.Response.WriteAsJsonAsync(new ProblemDetails
+
+        var problem = new ProblemDetails
         {
-            Status = StatusCodes.Status500InternalServerError,
-            Title = "Erro interno do servidor.",
-            Detail = "Ocorreu um erro inesperado. Tente novamente mais tarde.",
-            Type = "https://tools.ietf.org/html/rfc7807"
-        });
+            Type     = ProblemDetailsHelper.GetTypeUri(500),
+            Title    = ProblemDetailsHelper.GetTitle(500),
+            Status   = StatusCodes.Status500InternalServerError,
+            Detail   = "Ocorreu um erro inesperado. Tente novamente mais tarde.",
+            Instance = context.Request.Path
+        };
+        problem.Extensions["traceId"] = context.TraceIdentifier;
+
+        await context.Response.WriteAsJsonAsync(problem);
     });
 });
 

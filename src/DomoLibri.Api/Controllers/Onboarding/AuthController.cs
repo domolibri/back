@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using DomoLibri.Api;
 using DomoLibri.Application.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -65,9 +66,10 @@ public class AuthController : ControllerBase
         {
             return Problem(
                 detail: ex.Message,
+                instance: HttpContext.Request.Path,
                 statusCode: StatusCodes.Status409Conflict,
-                title: "Conflito.",
-                type: "https://tools.ietf.org/html/rfc7807");
+                title: ProblemDetailsHelper.GetTitle(409),
+                type: ProblemDetailsHelper.GetTypeUri(409));
         }
     }
 
@@ -86,7 +88,12 @@ public class AuthController : ControllerBase
         }
         catch (UnauthorizedAccessException ex)
         {
-            return Unauthorized(new { Message = ex.Message });
+            return Problem(
+                detail: ex.Message,
+                instance: HttpContext.Request.Path,
+                statusCode: StatusCodes.Status401Unauthorized,
+                title: ProblemDetailsHelper.GetTitle(401),
+                type: ProblemDetailsHelper.GetTypeUri(401));
         }
     }
 }
