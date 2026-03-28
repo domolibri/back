@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="DomoLibri.Api/DomoLibri.Api.csproj" />
+  <Project Path="DomoLibri.Application/DomoLibri.Application.csproj" />
+  <Project Path="DomoLibri.Domain/DomoLibri.Domain.csproj" />
+  <Project Path="DomoLibri.Infrastructure/DomoLibri.Infrastructure.csproj" />
+</Solution>

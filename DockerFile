@@ -1,0 +1,36 @@
+# 1. Estágio base para execução (Runtime do .NET 8)
+FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS base
+USER app
+WORKDIR /app
+EXPOSE 8080
+
+# 2. Estágio de build (SDK do .NET 8)
+FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+ARG BUILD_CONFIGURATION=Release
+WORKDIR /src
+
+# Copia os arquivos de projeto (.csproj) para restaurar as dependências
+# O contexto do build deve ser a raiz do repositório (onde está a pasta src)
+COPY ["src/DomoLibri.Api/DomoLibri.Api.csproj", "DomoLibri.Api/"]
+COPY ["src/DomoLibri.Application/DomoLibri.Application.csproj", "DomoLibri.Application/"]
+COPY ["src/DomoLibri.Domain/DomoLibri.Domain.csproj", "DomoLibri.Domain/"]
+COPY ["src/DomoLibri.Infrastructure/DomoLibri.Infrastructure.csproj", "DomoLibri.Infrastructure/"]
+RUN dotnet restore "DomoLibri.Api/DomoLibri.Api.csproj"
+
+# Copia todo o conteúdo da pasta src para o container
+COPY src/ .
+
+# Compila a API
+WORKDIR "/src/DomoLibri.Api"
+RUN dotnet build "DomoLibri.Api.csproj" -c $BUILD_CONFIGURATION -o /app/build
+
+# 3. Estágio de publicação
+FROM build AS publish
+ARG BUILD_CONFIGURATION=Release
+RUN dotnet publish "DomoLibri.Api.csproj" -c $BUILD_CONFIGURATION -o /app/publish /p:UseAppHost=false
+
+# 4. Estágio final
+FROM base AS final
+WORKDIR /app
+COPY --from=publish /app/publish .
+ENTRYPOINT ["dotnet", "DomoLibri.Api.dll"]
