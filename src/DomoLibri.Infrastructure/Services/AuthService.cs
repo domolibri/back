@@ -25,6 +25,9 @@ public class AuthService : IAuthService
 
     public async Task<RegisterEditoraResult> RegisterAsync(RegisterEditoraDto dto)
     {
+        var email = dto.EmailAdmin.Trim().ToLower();
+
+        // 1. Check if Editora name/slug is already taken
         var slug = GerarSlug(dto.NomeEditora);
 
         var slugExiste = await _context.Editoras

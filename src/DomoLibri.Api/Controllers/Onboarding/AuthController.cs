@@ -2,6 +2,7 @@ using System.ComponentModel.DataAnnotations;
 using DomoLibri.Api;
 using DomoLibri.Application.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace DomoLibri.Api.Controllers.Onboarding;
 
@@ -32,6 +33,7 @@ public record LoginRequest(
 
 [ApiController]
 [Route("api/[controller]")]
+[EnableRateLimiting("auth-limit")]
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
@@ -43,7 +45,7 @@ public class AuthController : ControllerBase
 
     /// <summary>
     /// Step 1: Registers a new Editora and its first Admin user.
-    /// Endpoint: POST /api/auth/register
+    /// Sets a secure HttpOnly cookie with the JWT.
     /// </summary>
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
@@ -58,9 +60,11 @@ public class AuthController : ControllerBase
 
             var result = await _authService.RegisterAsync(dto);
 
+            SetTokenCookie(result.Token);
+
             return Created(
                 $"/api/editoras/{result.EditoraId}",
-                new { result.EditoraId, result.Token, Message = "Editora criada com sucesso." });
+                new { result.EditoraId, Token = result.Token, Message = "Editora criada com sucesso." });
         }
         catch (InvalidOperationException ex)
         {
@@ -74,8 +78,7 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
-    /// Step 2: Authenticates a user and returns a JWT containing the EditoraId.
-    /// Endpoint: POST /api/auth/login
+    /// Step 2: Authenticates a user and sets a secure HttpOnly cookie with the JWT.
     /// </summary>
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
@@ -84,7 +87,10 @@ public class AuthController : ControllerBase
         {
             var dto = new LoginDto(request.Email, request.Senha);
             var result = await _authService.LoginAsync(dto);
-            return Ok(new { result.Token });
+            
+            SetTokenCookie(result.Token);
+            
+            return Ok(new { result.Token, Message = "Login realizado com sucesso." });
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -95,5 +101,27 @@ public class AuthController : ControllerBase
                 title: ProblemDetailsHelper.GetTitle(401),
                 type: ProblemDetailsHelper.GetTypeUri(401));
         }
+    }
+
+    /// <summary>
+    /// Clears the authentication cookie.
+    /// </summary>
+    [HttpPost("logout")]
+    public IActionResult Logout()
+    {
+        Response.Cookies.Delete("access_token");
+        return Ok(new { Message = "Logout realizado com sucesso." });
+    }
+
+    private void SetTokenCookie(string token)
+    {
+        var cookieOptions = new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = true, // Must be true for SameSite=None or when using HTTPS
+            SameSite = SameSiteMode.Strict,
+            Expires = DateTime.UtcNow.AddHours(8)
+        };
+        Response.Cookies.Append("access_token", token, cookieOptions);
     }
 }
