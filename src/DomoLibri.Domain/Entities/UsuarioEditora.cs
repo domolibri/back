@@ -21,6 +21,9 @@ public class UsuarioEditora
     public string? TokenConfirmacao { get; set; }
     public DateTime? ExpiracaoToken { get; set; }
 
+    public string? TokenRedefinicaoSenha { get; set; }
+    public DateTime? ExpiracaoTokenRedefinicaoSenha { get; set; }
+
     // Navigation property
     public Editora? Editora { get; set; }
 }

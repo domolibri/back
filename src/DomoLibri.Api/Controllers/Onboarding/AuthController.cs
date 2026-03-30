@@ -41,6 +41,28 @@ public record VerifyEmailRequest(
     [Required(ErrorMessage = "Token é obrigatório.")]
     string Token);
 
+public record ResendVerificationEmailRequest(
+    [Required(ErrorMessage = "E-mail é obrigatório.")]
+    [EmailAddress(ErrorMessage = "Informe um e-mail válido.")]
+    string Email);
+
+public record ForgotPasswordRequest(
+    [Required(ErrorMessage = "E-mail é obrigatório.")]
+    [EmailAddress(ErrorMessage = "Informe um e-mail válido.")]
+    string Email);
+
+public record ResetPasswordRequest(
+    [Required(ErrorMessage = "E-mail é obrigatório.")]
+    [EmailAddress(ErrorMessage = "Informe um e-mail válido.")]
+    string Email,
+
+    [Required(ErrorMessage = "Token é obrigatório.")]
+    string Token,
+
+    [Required(ErrorMessage = "Nova senha é obrigatória.")]
+    [MinLength(8, ErrorMessage = "Senha deve ter pelo menos 8 caracteres.")]
+    string NovaSenha);
+
 [ApiController]
 [Route("api/[controller]")]
 [EnableRateLimiting("auth-limit")]
@@ -134,6 +156,50 @@ public class AuthController : ControllerBase
                 statusCode: StatusCodes.Status401Unauthorized,
                 title: ProblemDetailsHelper.GetTitle(401),
                 type: ProblemDetailsHelper.GetTypeUri(401));
+        }
+    }
+
+    /// <summary>
+    /// Resends the e-mail verification link for an unverified account.
+    /// Always returns 200 to avoid e-mail enumeration.
+    /// </summary>
+    [HttpPost("resend-verification-email")]
+    public async Task<IActionResult> ResendVerificationEmail([FromBody] ResendVerificationEmailRequest request)
+    {
+        await _authService.ResendVerificationEmailAsync(request.Email);
+        return Ok(new { Message = "Se o e-mail existir e não estiver verificado, um novo link foi enviado." });
+    }
+
+    /// <summary>
+    /// Sends a password reset link to the given e-mail.
+    /// Always returns 200 to avoid e-mail enumeration.
+    /// </summary>
+    [HttpPost("forgot-password")]
+    public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request)
+    {
+        await _authService.ForgotPasswordAsync(new ForgotPasswordDto(request.Email));
+        return Ok(new { Message = "Se o e-mail estiver cadastrado, você receberá um link em breve." });
+    }
+
+    /// <summary>
+    /// Resets the user's password using a valid reset token.
+    /// </summary>
+    [HttpPost("reset-password")]
+    public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request)
+    {
+        try
+        {
+            await _authService.ResetPasswordAsync(new ResetPasswordDto(request.Email, request.Token, request.NovaSenha));
+            return Ok(new { Message = "Senha redefinida com sucesso." });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Problem(
+                detail: ex.Message,
+                instance: HttpContext.Request.Path,
+                statusCode: StatusCodes.Status400BadRequest,
+                title: ProblemDetailsHelper.GetTitle(400),
+                type: ProblemDetailsHelper.GetTypeUri(400));
         }
     }
 

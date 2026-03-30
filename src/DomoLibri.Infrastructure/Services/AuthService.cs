@@ -39,6 +39,14 @@ public class AuthService : IAuthService
         if (slugExiste)
             throw new InvalidOperationException($"Já existe uma editora com o nome '{dto.NomeEditora}'.");
 
+        // 2. Check if Email is already registered globally (since we don't have tenant context yet)
+        var emailExiste = await _context.UsuariosEditora
+            .IgnoreQueryFilters()
+            .AnyAsync(u => u.Email == email);
+
+        if (emailExiste)
+            throw new InvalidOperationException("Este e-mail já está cadastrado.");
+
         var editora = new Editora
         {
             Id = Guid.NewGuid(),
@@ -81,6 +89,7 @@ public class AuthService : IAuthService
     public async Task<LoginResult> LoginAsync(LoginDto dto)
     {
         var user = await _context.UsuariosEditora
+            .IgnoreQueryFilters()
             .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
 
         if (user is null || !BCrypt.Net.BCrypt.Verify(dto.Senha, user.SenhaHash))
@@ -99,6 +108,7 @@ public class AuthService : IAuthService
     public async Task VerifyEmailAsync(VerifyEmailDto dto)
     {
         var user = await _context.UsuariosEditora
+            .IgnoreQueryFilters()
             .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
 
         if (user is null || user.TokenConfirmacao != dto.Token)
@@ -113,6 +123,77 @@ public class AuthService : IAuthService
         user.EmailConfirmado = true;
         user.TokenConfirmacao = null;
         user.ExpiracaoToken = null;
+
+        await _context.SaveChangesAsync();
+    }
+
+    public async Task ResendVerificationEmailAsync(string email)
+    {
+        var normalizedEmail = email.Trim().ToLower();
+
+        var user = await _context.UsuariosEditora
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(u => u.Email == normalizedEmail);
+
+        // Return silently if user not found to avoid email enumeration
+        if (user is null || user.EmailConfirmado)
+            return;
+
+        var newToken = Guid.NewGuid().ToString("N");
+        user.TokenConfirmacao = newToken;
+        user.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+
+        await _context.SaveChangesAsync();
+
+        var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
+        var verificationLink = $"{frontendUrl}/onboarding/verify-email" +
+                               $"?email={Uri.EscapeDataString(user.Email)}&token={newToken}";
+
+        await _emailService.SendVerificationEmailAsync(user.Email, user.Nome, verificationLink);
+    }
+
+    public async Task ForgotPasswordAsync(ForgotPasswordDto dto)
+    {
+        var email = dto.Email.Trim().ToLower();
+
+        var user = await _context.UsuariosEditora
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(u => u.Email == email);
+
+        // Return silently to avoid e-mail enumeration
+        if (user is null || !user.Ativo || !user.EmailConfirmado)
+            return;
+
+        var resetToken = Guid.NewGuid().ToString("N");
+        user.TokenRedefinicaoSenha = resetToken;
+        user.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+
+        await _context.SaveChangesAsync();
+
+        var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
+        var resetLink = $"{frontendUrl}/redefinir-senha" +
+                        $"?email={Uri.EscapeDataString(user.Email)}&token={resetToken}";
+
+        await _emailService.SendPasswordResetEmailAsync(user.Email, user.Nome, resetLink);
+    }
+
+    public async Task ResetPasswordAsync(ResetPasswordDto dto)
+    {
+        var email = dto.Email.Trim().ToLower();
+
+        var user = await _context.UsuariosEditora
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(u => u.Email == email);
+
+        if (user is null || user.TokenRedefinicaoSenha != dto.Token)
+            throw new InvalidOperationException("Link de redefinição inválido.");
+
+        if (user.ExpiracaoTokenRedefinicaoSenha < DateTime.UtcNow)
+            throw new InvalidOperationException("Link de redefinição expirado. Solicite um novo.");
+
+        user.SenhaHash = BCrypt.Net.BCrypt.HashPassword(dto.NovaSenha);
+        user.TokenRedefinicaoSenha = null;
+        user.ExpiracaoTokenRedefinicaoSenha = null;
 
         await _context.SaveChangesAsync();
     }

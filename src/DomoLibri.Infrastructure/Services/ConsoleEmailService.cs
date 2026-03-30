@@ -20,4 +20,13 @@ public class ConsoleEmailService : IEmailService
 
         return Task.CompletedTask;
     }
+
+    public Task SendPasswordResetEmailAsync(string toEmail, string userName, string resetLink)
+    {
+        _logger.LogInformation(
+            "[EMAIL SIMULADO] Para: {Email} | Usuário: {UserName} | Link de redefinição de senha: {Link}",
+            toEmail, userName, resetLink);
+
+        return Task.CompletedTask;
+    }
 }
