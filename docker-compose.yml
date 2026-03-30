@@ -1,6 +1,5 @@
-version: '3.8'
-
 services:
+  # 1. Banco de Dados PostgreSQL
   db:
     image: postgres:16-alpine
     container_name: domolibri_postgres
@@ -9,10 +8,21 @@ services:
       POSTGRES_PASSWORD: AdminPassword123!
       POSTGRES_DB: domolibri_db
     ports:
-      - "5432:5432" # Maps container port to local host port
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
+  # 2. Servidor SMTP de Testes (Mailpit)
+  mailpit:
+    image: axllent/mailpit
+    container_name: domolibri_mailpit
+    ports:
+      - "8025:8025" # Interface Web (Acesse no navegador para ver os e-mails)
+      - "1025:1025" # Porta SMTP (Onde a API vai se conectar para enviar os e-mails)
+    environment:
+      MP_MAX_MESSAGES: 500
+
+  # 3. Backend .NET 8 API
   api:
     container_name: domolibri_api
     build:
@@ -21,12 +31,17 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - ASPNETCORE_URLS=http://+:8080
-      - ASPNETCORE_ENVIRONMENT=Development
-      # Overrides the connection string in appsettings.json
+      # String de conexão com o banco de dados
       - ConnectionStrings__DefaultConnection=Host=db;Database=domolibri_db;Username=postgres;Password=AdminPassword123!
+      
+      # Variáveis de ambiente para o envio de e-mail (apontando para o container do Mailpit)
+      - EmailSettings__SmtpServer=mailpit
+      - EmailSettings__SmtpPort=1025
+      - EmailSettings__SenderName=Domo Libri Onboarding
+      - EmailSettings__SenderEmail=no-reply@domolibri.com.br
     depends_on:
       - db
+      - mailpit
 
 volumes:
   postgres_data:

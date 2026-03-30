@@ -31,6 +31,14 @@ public record LoginRequest(
     [Required(ErrorMessage = "Senha é obrigatória.")]
     string Senha);
 
+public record VerifyEmailRequest(
+    [Required(ErrorMessage = "E-mail é obrigatório.")]
+    [EmailAddress(ErrorMessage = "Informe um e-mail válido.")]
+    string Email,
+
+    [Required(ErrorMessage = "Token é obrigatório.")]
+    string Token);
+
 [ApiController]
 [Route("api/[controller]")]
 [EnableRateLimiting("auth-limit")]
@@ -78,7 +86,31 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
-    /// Step 2: Authenticates a user and sets a secure HttpOnly cookie with the JWT.
+    /// Step 2: Verifies the user's e-mail using the token sent during registration.
+    /// </summary>
+    [HttpPost("verify-email")]
+    public async Task<IActionResult> VerifyEmail([FromBody] VerifyEmailRequest request)
+    {
+        try
+        {
+            var dto = new VerifyEmailDto(request.Email, request.Token);
+            await _authService.VerifyEmailAsync(dto);
+
+            return Ok(new { Message = "E-mail verificado com sucesso." });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Problem(
+                detail: ex.Message,
+                instance: HttpContext.Request.Path,
+                statusCode: StatusCodes.Status400BadRequest,
+                title: ProblemDetailsHelper.GetTitle(400),
+                type: ProblemDetailsHelper.GetTypeUri(400));
+        }
+    }
+
+    /// <summary>
+    /// Step 3: Authenticates a user and sets a secure HttpOnly cookie with the JWT.
     /// </summary>
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)

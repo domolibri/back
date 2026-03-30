@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using DomoLibri.Application.Services;
 using DomoLibri.Domain.Entities;
 using DomoLibri.Domain.Enums;
+using DomoLibri.Domain.Interfaces;
 using DomoLibri.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -16,11 +17,13 @@ public class AuthService : IAuthService
 {
     private readonly DomoLibriDbContext _context;
     private readonly IConfiguration _configuration;
+    private readonly IEmailService _emailService;
 
-    public AuthService(DomoLibriDbContext context, IConfiguration configuration)
+    public AuthService(DomoLibriDbContext context, IConfiguration configuration, IEmailService emailService)
     {
         _context = context;
         _configuration = configuration;
+        _emailService = emailService;
     }
 
     public async Task<RegisterEditoraResult> RegisterAsync(RegisterEditoraDto dto)
@@ -46,21 +49,31 @@ public class AuthService : IAuthService
         };
 
         var senhaHash = BCrypt.Net.BCrypt.HashPassword(dto.Senha);
+        var confirmationToken = Guid.NewGuid().ToString("N");
 
         var adminUser = new UsuarioEditora
         {
             Id = Guid.NewGuid(),
             EditoraId = editora.Id,
-            Email = dto.EmailAdmin.Trim().ToLower(),
+            Email = email,
             SenhaHash = senhaHash,
             Nome = dto.NomeAdmin,
             Role = Role.Admin,
-            Ativo = true
+            Ativo = true,
+            EmailConfirmado = false,
+            TokenConfirmacao = confirmationToken,
+            ExpiracaoToken = DateTime.UtcNow.AddHours(24)
         };
 
         _context.Editoras.Add(editora);
         _context.UsuariosEditora.Add(adminUser);
         await _context.SaveChangesAsync();
+
+        var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
+        var verificationLink = $"{frontendUrl}/onboarding/verify-email" +
+                               $"?email={Uri.EscapeDataString(adminUser.Email)}&token={confirmationToken}";
+
+        await _emailService.SendVerificationEmailAsync(adminUser.Email, adminUser.Nome, verificationLink);
 
         var token = GenerateJwt(adminUser);
         return new RegisterEditoraResult(editora.Id, token);
@@ -77,8 +90,32 @@ public class AuthService : IAuthService
         if (!user.Ativo)
             throw new UnauthorizedAccessException("Usuário inativo.");
 
+        if (!user.EmailConfirmado)
+            throw new UnauthorizedAccessException("E-mail não verificado.");
+
         var token = GenerateJwt(user);
         return new LoginResult(token);
+    }
+
+    public async Task VerifyEmailAsync(VerifyEmailDto dto)
+    {
+        var user = await _context.UsuariosEditora
+            .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
+
+        if (user is null || user.TokenConfirmacao != dto.Token)
+            throw new InvalidOperationException("Token de verificação inválido.");
+
+        if (user.ExpiracaoToken < DateTime.UtcNow)
+            throw new InvalidOperationException("Token de verificação expirado.");
+
+        if (user.EmailConfirmado)
+            throw new InvalidOperationException("E-mail já confirmado.");
+
+        user.EmailConfirmado = true;
+        user.TokenConfirmacao = null;
+        user.ExpiracaoToken = null;
+
+        await _context.SaveChangesAsync();
     }
 
     private string GenerateJwt(UsuarioEditora user)

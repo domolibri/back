@@ -1,4 +1,6 @@
 using DomoLibri.Application.Services;
+using DomoLibri.Domain.Interfaces;
+using DomoLibri.Domain.Settings;
 using DomoLibri.Infrastructure.Services;
 using DomoLibri.Infrastructure.Data;
 using DomoLibri.Api;
@@ -87,6 +89,8 @@ builder.Services.AddScoped<ITenantProvider, HttpTenantProvider>();
 
 // Register application services
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Smtp"));
+builder.Services.AddScoped<IEmailService, EmailService>();
 
 // Configure JWT authentication
 var jwtSection = builder.Configuration.GetSection("Jwt");

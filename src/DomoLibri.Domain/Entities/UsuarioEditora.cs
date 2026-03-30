@@ -17,6 +17,10 @@ public class UsuarioEditora
     public Role Role { get; set; }
     public bool Ativo { get; set; }
 
+    public bool EmailConfirmado { get; set; }
+    public string? TokenConfirmacao { get; set; }
+    public DateTime? ExpiracaoToken { get; set; }
+
     // Navigation property
     public Editora? Editora { get; set; }
 }

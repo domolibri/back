@@ -12,8 +12,11 @@ public record LoginDto(string Email, string Senha);
 
 public record LoginResult(string Token);
 
+public record VerifyEmailDto(string Email, string Token);
+
 public interface IAuthService
 {
     Task<RegisterEditoraResult> RegisterAsync(RegisterEditoraDto dto);
     Task<LoginResult> LoginAsync(LoginDto dto);
+    Task VerifyEmailAsync(VerifyEmailDto dto);
 }
