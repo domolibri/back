@@ -75,8 +75,7 @@ public class AuthService : IAuthService
 
         await _emailService.SendVerificationEmailAsync(adminUser.Email, adminUser.Nome, verificationLink);
 
-        var token = GenerateJwt(adminUser);
-        return new RegisterEditoraResult(editora.Id, token);
+        return new RegisterEditoraResult(editora.Id);
     }
 
     public async Task<LoginResult> LoginAsync(LoginDto dto)

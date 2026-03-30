@@ -16,7 +16,9 @@ public record RegisterRequest(
     string EmailAdmin,
 
     [Required(ErrorMessage = "Senha é obrigatória.")]
-    [MinLength(6, ErrorMessage = "Senha deve ter pelo menos 6 caracteres.")]
+    [MinLength(8, ErrorMessage = "Senha deve ter pelo menos 8 caracteres.")]
+    [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$", 
+        ErrorMessage = "A senha deve conter pelo menos uma letra maiúscula, uma minúscula, um número e um caractere especial.")]
     string Senha,
 
     [Required(ErrorMessage = "Nome do administrador é obrigatório.")]
@@ -53,7 +55,7 @@ public class AuthController : ControllerBase
 
     /// <summary>
     /// Step 1: Registers a new Editora and its first Admin user.
-    /// Sets a secure HttpOnly cookie with the JWT.
+    /// Does NOT set a cookie yet. User must verify e-mail first.
     /// </summary>
     [HttpPost("register")]
     public async Task<IActionResult> Register([FromBody] RegisterRequest request)
@@ -68,11 +70,11 @@ public class AuthController : ControllerBase
 
             var result = await _authService.RegisterAsync(dto);
 
-            SetTokenCookie(result.Token);
+            // Removed SetTokenCookie here. Security: Force verification before login.
 
             return Created(
                 $"/api/editoras/{result.EditoraId}",
-                new { result.EditoraId, Token = result.Token, Message = "Editora criada com sucesso." });
+                new { result.EditoraId, Message = "Editora criada com sucesso. Verifique seu e-mail para confirmar a conta." });
         }
         catch (InvalidOperationException ex)
         {

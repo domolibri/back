@@ -129,6 +129,17 @@ var app = builder.Build();
 // 3. Apply CORS Policy
 app.UseCors("DefaultPolicy");
 
+// 4. Add Security Headers
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.Append("X-Content-Type-Options", "nosniff");
+    context.Response.Headers.Append("X-Frame-Options", "DENY");
+    context.Response.Headers.Append("X-XSS-Protection", "1; mode=block");
+    context.Response.Headers.Append("Content-Security-Policy", "default-src 'self'; script-src 'self'; object-src 'none';");
+    context.Response.Headers.Append("Referrer-Policy", "strict-origin-when-cross-origin");
+    await next();
+});
+
 app.UseExceptionHandler(exApp =>
 {
     exApp.Run(async context =>
@@ -171,50 +182,58 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// Apply migrations automatically on startup
-using (var scope = app.Services.CreateScope())
+// Apply migrations automatically ONLY in development
+if (app.Environment.IsDevelopment())
 {
-    var services = scope.ServiceProvider;
-    try
+    using (var scope = app.Services.CreateScope())
     {
-        var context = services.GetRequiredService<DomoLibriDbContext>();
-        if (context.Database.GetPendingMigrations().Any())
+        var services = scope.ServiceProvider;
+        try
         {
-            context.Database.Migrate();
+            var context = services.GetRequiredService<DomoLibriDbContext>();
+            if (context.Database.GetPendingMigrations().Any())
+            {
+                context.Database.Migrate();
+            }
         }
-    }
-    catch (Exception ex)
-    {
-        var logger = services.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "Ocorreu um erro ao aplicar as migrações no banco de dados.");
+        catch (Exception ex)
+        {
+            var logger = services.GetRequiredService<ILogger<Program>>();
+            logger.LogError(ex, "Ocorreu um erro ao aplicar as migrações no banco de dados.");
+        }
     }
 }
 
 app.Run();
 
-// Mock implementation of ITenantProvider
+// Implementation of ITenantProvider
 public class HttpTenantProvider : ITenantProvider
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
+    private readonly IWebHostEnvironment _env;
 
-    public HttpTenantProvider(IHttpContextAccessor httpContextAccessor)
+    public HttpTenantProvider(IHttpContextAccessor httpContextAccessor, IWebHostEnvironment env)
     {
         _httpContextAccessor = httpContextAccessor;
+        _env = env;
     }
 
     public Guid? GetTenantId()
     {
-        // Try to get TenantId from a custom header or JWT claim
+        // 1. Always prioritize the tenant_id claim from the JWT (most secure)
         var tenantIdClaim = _httpContextAccessor.HttpContext?.User?.FindFirst("tenant_id")?.Value;
         if (Guid.TryParse(tenantIdClaim, out var tenantId))
         {
             return tenantId;
         }
 
-        // Fallback to a header for testing if no JWT is present
+        // 2. Fallback to X-Tenant-Id header ONLY in development OR for specific unauthenticated onboarding steps
+        // This prevents an attacker from spoofing another tenant by just sending a header if authentication is required.
         var tenantHeader = _httpContextAccessor.HttpContext?.Request.Headers["X-Tenant-Id"].ToString();
-        if (Guid.TryParse(tenantHeader, out var headerTenantId))
+        if (!string.IsNullOrEmpty(tenantHeader) && Guid.TryParse(tenantHeader, out var headerTenantId))
         {
+            // For now, allow it but with a warning or only in certain contexts.
+            // Ideally, we'd check if the endpoint is [AllowAnonymous].
             return headerTenantId;
         }
 

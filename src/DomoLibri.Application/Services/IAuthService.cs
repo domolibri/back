@@ -6,7 +6,7 @@ public record RegisterEditoraDto(
     string Senha,
     string NomeAdmin);
 
-public record RegisterEditoraResult(Guid EditoraId, string Token);
+public record RegisterEditoraResult(Guid EditoraId);
 
 public record LoginDto(string Email, string Senha);
 
