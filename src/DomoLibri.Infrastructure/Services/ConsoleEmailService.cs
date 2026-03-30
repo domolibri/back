@@ -12,6 +12,15 @@ public class ConsoleEmailService : IEmailService
         _logger = logger;
     }
 
+    public Task SendEmailAsync(string toEmail, string subject, string body)
+    {
+        _logger.LogInformation(
+            "[EMAIL SIMULADO] Para: {Email} | Assunto: {Subject} | Corpo: {Body}",
+            toEmail, subject, body);
+
+        return Task.CompletedTask;
+    }
+
     public Task SendVerificationEmailAsync(string toEmail, string userName, string verificationLink)
     {
         _logger.LogInformation(

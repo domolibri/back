@@ -61,6 +61,8 @@ public record ResetPasswordRequest(
 
     [Required(ErrorMessage = "Nova senha é obrigatória.")]
     [MinLength(8, ErrorMessage = "Senha deve ter pelo menos 8 caracteres.")]
+    [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$", 
+        ErrorMessage = "A senha deve conter pelo menos uma letra maiúscula, uma minúscula, um número e um caractere especial.")]
     string NovaSenha);
 
 [ApiController]

@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using DomoLibri.Application.Services;
@@ -40,12 +41,20 @@ public class AuthService : IAuthService
             throw new InvalidOperationException($"Já existe uma editora com o nome '{dto.NomeEditora}'.");
 
         // 2. Check if Email is already registered globally (since we don't have tenant context yet)
-        var emailExiste = await _context.UsuariosEditora
+        var existingUser = await _context.UsuariosEditora
             .IgnoreQueryFilters()
-            .AnyAsync(u => u.Email == email);
+            .FirstOrDefaultAsync(u => u.Email == email);
 
-        if (emailExiste)
-            throw new InvalidOperationException("Este e-mail já está cadastrado.");
+        if (existingUser != null)
+        {
+            // Security: To avoid email enumeration, we return success even if email exists.
+            // But we send an email to the user informing them of the attempt.
+            await _emailService.SendEmailAsync(email, "Tentativa de cadastro", 
+                $"Olá {existingUser.Nome}, alguém tentou cadastrar uma nova editora com seu e-mail. Se foi você, lembre-se que já possui uma conta.");
+            
+            // Return a dummy ID or the existing one (careful with info leakage)
+            return new RegisterEditoraResult(existingUser.EditoraId);
+        }
 
         var editora = new Editora
         {
@@ -57,7 +66,8 @@ public class AuthService : IAuthService
         };
 
         var senhaHash = BCrypt.Net.BCrypt.HashPassword(dto.Senha);
-        var confirmationToken = Guid.NewGuid().ToString("N");
+        var confirmationToken = GenerateSecureToken();
+        var hashedConfirmationToken = HashToken(confirmationToken);
 
         var adminUser = new UsuarioEditora
         {
@@ -69,7 +79,7 @@ public class AuthService : IAuthService
             Role = Role.Admin,
             Ativo = true,
             EmailConfirmado = false,
-            TokenConfirmacao = confirmationToken,
+            TokenConfirmacao = hashedConfirmationToken,
             ExpiracaoToken = DateTime.UtcNow.AddHours(24)
         };
 
@@ -92,7 +102,7 @@ public class AuthService : IAuthService
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
 
-        if (user is null || !BCrypt.Net.BCrypt.Verify(dto.Senha, user.SenhaHash))
+        if (user is null)
             throw new UnauthorizedAccessException("Credenciais inválidas.");
 
         if (!user.Ativo)
@@ -100,6 +110,38 @@ public class AuthService : IAuthService
 
         if (!user.EmailConfirmado)
             throw new UnauthorizedAccessException("E-mail não verificado.");
+
+        // 1. Check if the account is currently locked
+        if (user.BloqueioAte.HasValue && user.BloqueioAte.Value > DateTime.UtcNow)
+        {
+            var remainingTime = Math.Ceiling((user.BloqueioAte.Value - DateTime.UtcNow).TotalMinutes);
+            throw new UnauthorizedAccessException($"Esta conta está temporariamente bloqueada por múltiplas tentativas falhas. Tente novamente em {remainingTime} minuto(s).");
+        }
+
+        // 2. Verify password
+        if (!BCrypt.Net.BCrypt.Verify(dto.Senha, user.SenhaHash))
+        {
+            // Increment failed attempts
+            user.AcessosFalhos++;
+
+            if (user.AcessosFalhos >= 5)
+            {
+                user.BloqueioAte = DateTime.UtcNow.AddMinutes(15);
+                user.AcessosFalhos = 0; // Reset after locking
+            }
+
+            await _context.SaveChangesAsync();
+            throw new UnauthorizedAccessException("Credenciais inválidas.");
+        }
+
+        // 3. Reset lockout state on successful login
+        if (user.AcessosFalhos > 0 || user.BloqueioAte.HasValue)
+        {
+            user.AcessosFalhos = 0;
+            user.BloqueioAte = null;
+        }
+
+        await _context.SaveChangesAsync();
 
         var token = GenerateJwt(user);
         return new LoginResult(token);
@@ -111,7 +153,7 @@ public class AuthService : IAuthService
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
 
-        if (user is null || user.TokenConfirmacao != dto.Token)
+        if (user is null || user.TokenConfirmacao != HashToken(dto.Token))
             throw new InvalidOperationException("Token de verificação inválido.");
 
         if (user.ExpiracaoToken < DateTime.UtcNow)
@@ -139,8 +181,8 @@ public class AuthService : IAuthService
         if (user is null || user.EmailConfirmado)
             return;
 
-        var newToken = Guid.NewGuid().ToString("N");
-        user.TokenConfirmacao = newToken;
+        var newToken = GenerateSecureToken();
+        user.TokenConfirmacao = HashToken(newToken);
         user.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
 
         await _context.SaveChangesAsync();
@@ -164,8 +206,8 @@ public class AuthService : IAuthService
         if (user is null || !user.Ativo || !user.EmailConfirmado)
             return;
 
-        var resetToken = Guid.NewGuid().ToString("N");
-        user.TokenRedefinicaoSenha = resetToken;
+        var resetToken = GenerateSecureToken();
+        user.TokenRedefinicaoSenha = HashToken(resetToken);
         user.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
 
         await _context.SaveChangesAsync();
@@ -185,7 +227,7 @@ public class AuthService : IAuthService
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(u => u.Email == email);
 
-        if (user is null || user.TokenRedefinicaoSenha != dto.Token)
+        if (user is null || user.TokenRedefinicaoSenha != HashToken(dto.Token))
             throw new InvalidOperationException("Link de redefinição inválido.");
 
         if (user.ExpiracaoTokenRedefinicaoSenha < DateTime.UtcNow)
@@ -202,6 +244,10 @@ public class AuthService : IAuthService
     {
         var jwtSection = _configuration.GetSection("Jwt");
         var secret = jwtSection["Secret"]!;
+        
+        if (secret.Length < 32)
+            throw new InvalidOperationException("JWT Secret must be at least 32 characters long.");
+
         var issuer = jwtSection["Issuer"];
         var audience = jwtSection["Audience"];
         var expiresInHours = int.Parse(jwtSection["ExpiresInHours"] ?? "8");
@@ -225,6 +271,18 @@ public class AuthService : IAuthService
             signingCredentials: creds);
 
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private static string HashToken(string token)
+    {
+        using var sha256 = SHA256.Create();
+        var bytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(token));
+        return Convert.ToHexString(bytes);
+    }
+
+    private static string GenerateSecureToken()
+    {
+        return Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     }
 
     private static string GerarSlug(string nome)

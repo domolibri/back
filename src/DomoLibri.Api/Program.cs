@@ -210,30 +210,35 @@ app.Run();
 public class HttpTenantProvider : ITenantProvider
 {
     private readonly IHttpContextAccessor _httpContextAccessor;
-    private readonly IWebHostEnvironment _env;
 
-    public HttpTenantProvider(IHttpContextAccessor httpContextAccessor, IWebHostEnvironment env)
+    public HttpTenantProvider(IHttpContextAccessor httpContextAccessor)
     {
         _httpContextAccessor = httpContextAccessor;
-        _env = env;
     }
 
     public Guid? GetTenantId()
     {
+        var context = _httpContextAccessor.HttpContext;
+        if (context == null) return null;
+
         // 1. Always prioritize the tenant_id claim from the JWT (most secure)
-        var tenantIdClaim = _httpContextAccessor.HttpContext?.User?.FindFirst("tenant_id")?.Value;
+        var tenantIdClaim = context.User?.FindFirst("tenant_id")?.Value;
         if (Guid.TryParse(tenantIdClaim, out var tenantId))
         {
             return tenantId;
         }
 
-        // 2. Fallback to X-Tenant-Id header ONLY in development OR for specific unauthenticated onboarding steps
-        // This prevents an attacker from spoofing another tenant by just sending a header if authentication is required.
-        var tenantHeader = _httpContextAccessor.HttpContext?.Request.Headers["X-Tenant-Id"].ToString();
+        // 2. Fallback to X-Tenant-Id header ONLY for unauthenticated requests
+        // (e.g., public pages of a specific tenant or onboarding steps before login).
+        // If the user IS authenticated but the claim is missing, we do NOT trust the header.
+        if (context.User?.Identity?.IsAuthenticated == true)
+        {
+            return null;
+        }
+
+        var tenantHeader = context.Request.Headers["X-Tenant-Id"].ToString();
         if (!string.IsNullOrEmpty(tenantHeader) && Guid.TryParse(tenantHeader, out var headerTenantId))
         {
-            // For now, allow it but with a warning or only in certain contexts.
-            // Ideally, we'd check if the endpoint is [AllowAnonymous].
             return headerTenantId;
         }
 

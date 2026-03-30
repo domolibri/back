@@ -24,6 +24,10 @@ public class UsuarioEditora
     public string? TokenRedefinicaoSenha { get; set; }
     public DateTime? ExpiracaoTokenRedefinicaoSenha { get; set; }
 
+    // Account Lockout tracking
+    public int AcessosFalhos { get; set; }
+    public DateTime? BloqueioAte { get; set; }
+
     // Navigation property
     public Editora? Editora { get; set; }
 }
