@@ -1,8 +1,10 @@
+name: DomoLibri
+
 services:
   # 1. Banco de Dados PostgreSQL
-  db:
+  postgres:
     image: postgres:16-alpine
-    container_name: domolibri_postgres
+    container_name: postgres
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-AdminPassword123!}
@@ -15,7 +17,7 @@ services:
   # 2. Servidor SMTP de Testes (Mailpit)
   mailpit:
     image: axllent/mailpit
-    container_name: domolibri_mailpit
+    container_name: mailpit
     ports:
       - "127.0.0.1:8025:8025" # Interface Web restrita a localhost
       - "1025:1025" # Porta SMTP interna
@@ -24,15 +26,16 @@ services:
 
   # 3. Backend .NET 8 API
   api:
-    container_name: domolibri_api
+    container_name: api
     build:
       context: .
       dockerfile: DockerFile
     ports:
       - "8080:8080"
     environment:
-      # String de conexão com o banco de dados
-      - ConnectionStrings__DefaultConnection=Host=db;Database=${DB_NAME:-domolibri_db};Username=${DB_USER:-postgres};Password=${DB_PASSWORD:-AdminPassword123!}
+      - ASPNETCORE_ENVIRONMENT=Development
+      # String de conexão com o banco de dados (usando o nome do serviço 'postgres' como host)
+      - ConnectionStrings__DefaultConnection=Host=postgres;Database=${DB_NAME:-domolibri_db};Username=${DB_USER:-postgres};Password=${DB_PASSWORD:-AdminPassword123!}
       
       # Variáveis de ambiente para o envio de e-mail (apontando para o container do Mailpit)
       - EmailSettings__SmtpServer=mailpit
@@ -41,7 +44,7 @@ services:
       - EmailSettings__SenderEmail=no-reply@domolibri.com.br
       - Jwt__Secret=${JWT_SECRET:-YOUR_JWT_SECRET_KEY_MIN_32_CHARS}
     depends_on:
-      - db
+      - postgres
       - mailpit
 
 volumes:
