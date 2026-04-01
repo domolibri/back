@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using DomoLibri.Api;
 using DomoLibri.Application.Services;
+using DomoLibri.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 
@@ -71,10 +72,12 @@ public record ResetPasswordRequest(
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
+    private readonly DomoLibriDbContext _db;
 
-    public AuthController(IAuthService authService)
+    public AuthController(IAuthService authService, DomoLibriDbContext db)
     {
         _authService = authService;
+        _db = db;
     }
 
     /// <summary>
@@ -203,6 +206,35 @@ public class AuthController : ControllerBase
                 title: ProblemDetailsHelper.GetTitle(400),
                 type: ProblemDetailsHelper.GetTypeUri(400));
         }
+    }
+
+    /// <summary>
+    /// Validates the current session cookie and returns the authenticated user's identity.
+    /// Used by the frontend on startup to restore auth state without re-login.
+    /// </summary>
+    [HttpGet("me")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> Me()
+    {
+        var tenantId = User.FindFirst("tenant_id")?.Value;
+        var email    = User.FindFirst(System.Security.Claims.ClaimTypes.Email)?.Value
+                    ?? User.FindFirst("email")?.Value;
+        var nome     = User.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+                    ?? User.FindFirst("name")?.Value;
+
+        var brandingConfigurado = false;
+        string? nomeEditora = null;
+        if (Guid.TryParse(tenantId, out var editoraId))
+        {
+            var editora = await _db.Editoras.FindAsync(editoraId);
+            if (editora is not null)
+            {
+                nomeEditora = editora.Nome;
+                brandingConfigurado = editora.LogoUrl is not null || editora.CorPrimaria is not null;
+            }
+        }
+
+        return Ok(new { tenantId, email, nome, nomeEditora, brandingConfigurado });
     }
 
     /// <summary>
