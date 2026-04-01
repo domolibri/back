@@ -1,3 +1,4 @@
+using DomoLibri.Application.Interfaces;
 using DomoLibri.Application.Services;
 using DomoLibri.Domain.Interfaces;
 using DomoLibri.Domain.Settings;
@@ -89,6 +90,7 @@ builder.Services.AddDbContext<DomoLibriDbContext>(options =>
 builder.Services.AddScoped<ITenantProvider, HttpTenantProvider>();
 
 // Register application services
+builder.Services.AddScoped<IStorageService, BlobStorageService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Smtp"));
 builder.Services.AddScoped<IEmailService, EmailService>();

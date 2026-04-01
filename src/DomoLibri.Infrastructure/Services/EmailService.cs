@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using DomoLibri.Domain.Interfaces;
 using DomoLibri.Domain.Settings;
 using MailKit.Net.Smtp;
@@ -8,6 +9,7 @@ using System.Net;
 
 namespace DomoLibri.Infrastructure.Services;
 
+[ExcludeFromCodeCoverage(Justification = "Requires live SMTP server — covered by integration tests")]
 public class EmailService : IEmailService
 {
     private readonly EmailSettings _emailSettings;

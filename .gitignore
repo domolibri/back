@@ -39,3 +39,9 @@ project.assets.json
 # Ignore secrets
 secrets.json
 appsettings.Development.json
+
+# Ignore environment variables file (contains secrets)
+.env
+
+# Ignore Mailpit persistent data on host
+data/

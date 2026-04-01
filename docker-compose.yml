@@ -1,30 +1,48 @@
 name: DomoLibri
 
+# Todas as variaveis configuraveis estao no arquivo .env na raiz do projeto.
+# Copie .env.example para .env e ajuste os valores antes de executar.
+
 services:
   # 1. Banco de Dados PostgreSQL
   postgres:
     image: postgres:16-alpine
     container_name: postgres
     environment:
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-AdminPassword123!}
-      POSTGRES_DB: ${DB_NAME:-domolibri_db}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     ports:
-      - "127.0.0.1:5432:5432" # Restricted to localhost
+      - "127.0.0.1:5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
 
   # 2. Servidor SMTP de Testes (Mailpit)
+  # Emails ficam persistidos em ./data/mailpit/mailpit.db no host.
   mailpit:
     image: axllent/mailpit
     container_name: mailpit
     ports:
       - "127.0.0.1:8025:8025" # Interface Web restrita a localhost
-      - "1025:1025" # Porta SMTP interna
+      - "1025:1025"           # Porta SMTP interna
     environment:
-      MP_MAX_MESSAGES: 500
+      MP_MAX_MESSAGES: ${MP_MAX_MESSAGES}
+      MP_DATA_FILE: /data/mailpit.db
+    volumes:
+      - ./data/mailpit:/data
 
-  # 3. Backend .NET 8 API
+  # 3. Emulador de Armazenamento do Azure (Azurite)
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    container_name: azurite
+    ports:
+      - "10000:10000" # Blob Storage acessivel no host via localhost:10000
+    volumes:
+      - ./data/azurite:/data
+    # Forca o Azurite a escutar em todos os IPs do container e ignora check de versao da API
+    command: "azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck -l /data"
+
+  # 4. Backend .NET 8 API
   api:
     container_name: api
     build:
@@ -33,19 +51,37 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - ASPNETCORE_ENVIRONMENT=Development
-      # String de conexão com o banco de dados (usando o nome do serviço 'postgres' como host)
-      - ConnectionStrings__DefaultConnection=Host=postgres;Database=${DB_NAME:-domolibri_db};Username=${DB_USER:-postgres};Password=${DB_PASSWORD:-AdminPassword123!}
-      
-      # Variáveis de ambiente para o envio de e-mail (apontando para o container do Mailpit)
-      - EmailSettings__SmtpServer=mailpit
-      - EmailSettings__SmtpPort=1025
-      - EmailSettings__SenderName=Domo Libri Onboarding
-      - EmailSettings__SenderEmail=no-reply@domolibri.com.br
-      - Jwt__Secret=${JWT_SECRET:-YOUR_JWT_SECRET_KEY_MIN_32_CHARS}
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT}
+
+      # Banco de dados
+      ConnectionStrings__DefaultConnection: "Host=postgres;Database=${DB_NAME};Username=${DB_USER};Password=${DB_PASSWORD}"
+
+      # Blob Storage — conexao interna ao container do Azurite
+      ConnectionStrings__BlobStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
+      # URL publica usada nos links retornados pela API (acesso via navegador)
+      BlobStorage__PublicEndpoint: ${BLOB_PUBLIC_ENDPOINT}
+
+      # E-mail — aponta para o container do Mailpit
+      Smtp__SmtpServer: mailpit
+      Smtp__SmtpPort: "1025"
+      Smtp__UseSsl: "false"
+      Smtp__SenderName: ${SMTP_SENDER_NAME}
+      Smtp__SenderEmail: ${SMTP_SENDER_EMAIL}
+
+      # JWT
+      Jwt__Secret: ${JWT_SECRET}
+      Jwt__Issuer: DomoLibri
+      Jwt__Audience: DomoLibri
+      Jwt__ExpiresInHours: "1"
+
+      # Frontend (CORS e links de e-mail)
+      FrontendUrl: ${FRONTEND_URL}
+
     depends_on:
       - postgres
       - mailpit
+      - azurite
 
 volumes:
   postgres_data:
+  azurite_data:

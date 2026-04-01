@@ -92,8 +92,45 @@ Isso garante que o banco esteja sempre atualizado sem comandos manuais.
 
 ## 📝 Variáveis de Ambiente
 
-As configurações principais podem ser sobrescritas via variáveis de ambiente no arquivo `docker-compose.yml`:
+Todas as configurações são centralizadas no arquivo **`.env`** na raiz da pasta `backend/`.
 
-- `ConnectionStrings__DefaultConnection`: String de conexão com o banco.
-- `Jwt__Secret`: Chave secreta para geração de tokens JWT.
-- `ASPNETCORE_ENVIRONMENT`: Define o ambiente (Development/Production).
+### Configuração inicial
+
+```bash
+cp .env.example .env
+# Edite .env e defina as suas senhas e segredos
+```
+
+> **Atenção:** O arquivo `.env` contém segredos e está no `.gitignore`. Nunca o commite no repositório.
+
+### Variáveis disponíveis
+
+| Variável | Descrição | Padrão |
+|---|---|---|
+| `DB_USER` | Usuário do PostgreSQL | `postgres` |
+| `DB_PASSWORD` | Senha do PostgreSQL | — |
+| `DB_NAME` | Nome do banco de dados | `domolibri_db` |
+| `JWT_SECRET` | Chave secreta JWT (mín. 32 chars) | — |
+| `FRONTEND_URL` | URL do frontend (CORS e e-mails) | `http://localhost:4200` |
+| `SMTP_SENDER_NAME` | Nome do remetente dos e-mails | `Domo Libri` |
+| `SMTP_SENDER_EMAIL` | E-mail do remetente | `no-reply@domolibri.com.br` |
+| `MP_MAX_MESSAGES` | Máx. de mensagens no Mailpit | `500` |
+| `BLOB_PUBLIC_ENDPOINT` | URL pública do Azurite (navegador) | `http://localhost:10000/devstoreaccount1` |
+| `ASPNETCORE_ENVIRONMENT` | Ambiente ASP.NET Core | `Development` |
+
+### Serviços de infraestrutura (Docker)
+
+| Serviço | URL | Descrição |
+|---|---|---|
+| API | `http://localhost:8080/swagger` | Backend .NET 8 |
+| Mailpit | `http://localhost:8025` | Interface de e-mails (dev) |
+| Azurite | `http://localhost:10000` | Emulador Azure Blob Storage |
+| PostgreSQL | `localhost:5432` | Banco de dados |
+
+### Persistência do Mailpit
+
+Os e-mails são salvos em `./data/mailpit/mailpit.db` no host, permitindo que as mensagens sobrevivam ao restart dos containers.
+
+### Blob Storage (Azurite)
+
+Para o desenvolvimento local (fora do Docker), o backend conecta-se ao Azurite via `localhost:10000`. Dentro do Docker Compose, usa o hostname `azurite:10000`. A variável `BLOB_PUBLIC_ENDPOINT` garante que as URLs retornadas pela API apontem para o endereço acessível pelo navegador.

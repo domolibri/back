@@ -3,4 +3,5 @@
   <Project Path="DomoLibri.Application/DomoLibri.Application.csproj" />
   <Project Path="DomoLibri.Domain/DomoLibri.Domain.csproj" />
   <Project Path="DomoLibri.Infrastructure/DomoLibri.Infrastructure.csproj" />
+  <Project Path="DomoLibri.Tests/DomoLibri.Tests.csproj" />
 </Solution>
