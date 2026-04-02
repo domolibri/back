@@ -35,6 +35,70 @@ public class EditoraControllerTests
     }
 
     [Fact]
+    public async Task GetBranding_NoTenantId_Returns401Unauthorized()
+    {
+        var (controller, _, _) = CreateController(null);
+
+        var result = await controller.GetBranding();
+
+        Assert.IsType<UnauthorizedResult>(result);
+    }
+
+    [Fact]
+    public async Task GetBranding_EditoraNotFound_Returns404NotFound()
+    {
+        var (controller, _, _) = CreateController(Guid.NewGuid());
+
+        var result = await controller.GetBranding();
+
+        var notFound = Assert.IsType<NotFoundObjectResult>(result);
+        Assert.Equal(404, notFound.StatusCode);
+    }
+
+    [Fact]
+    public async Task GetBranding_WithExistingBranding_ReturnsBrandingData()
+    {
+        var tenantId = Guid.NewGuid();
+        var (controller, _, db) = CreateController(tenantId);
+
+        db.Editoras.Add(new Editora
+        {
+            Id = tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true,
+            LogoUrl = "https://storage.example.com/logo.png",
+            CorPrimaria = "#FF5500"
+        });
+        await db.SaveChangesAsync();
+
+        var result = await controller.GetBranding();
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(200, ok.StatusCode);
+
+        var data = ok.Value!;
+        var type = data.GetType();
+        Assert.Equal("https://storage.example.com/logo.png", type.GetProperty("LogoUrl")!.GetValue(data));
+        Assert.Equal("#FF5500", type.GetProperty("CorPrimaria")!.GetValue(data));
+    }
+
+    [Fact]
+    public async Task GetBranding_WithNoBrandingConfigured_ReturnsNullFields()
+    {
+        var tenantId = Guid.NewGuid();
+        var (controller, _, db) = CreateController(tenantId);
+
+        db.Editoras.Add(new Editora { Id = tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true });
+        await db.SaveChangesAsync();
+
+        var result = await controller.GetBranding();
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var data = ok.Value!;
+        var type = data.GetType();
+        Assert.Null(type.GetProperty("LogoUrl")!.GetValue(data));
+        Assert.Null(type.GetProperty("CorPrimaria")!.GetValue(data));
+    }
+
+    [Fact]
     public async Task UpdateBranding_NoTenantId_Returns401Unauthorized()
     {
         var (controller, _, _) = CreateController(null);

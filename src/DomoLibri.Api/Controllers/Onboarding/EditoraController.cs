@@ -26,6 +26,27 @@ public class EditoraController : ControllerBase
     }
 
     /// <summary>
+    /// Returns current branding settings (logo URL and primary color) for the authenticated Editora.
+    /// </summary>
+    [HttpGet("branding")]
+    public async Task<IActionResult> GetBranding()
+    {
+        var tenantId = _tenantProvider.GetTenantId();
+        if (tenantId is null)
+            return Unauthorized();
+
+        var editora = await _db.Editoras.FindAsync(tenantId.Value);
+        if (editora is null)
+            return NotFound(new { Message = "Editora não encontrada." });
+
+        return Ok(new
+        {
+            editora.LogoUrl,
+            editora.CorPrimaria
+        });
+    }
+
+    /// <summary>
     /// Updates branding settings (logo and/or primary color) for the authenticated Editora.
     /// </summary>
     [HttpPatch("branding")]
