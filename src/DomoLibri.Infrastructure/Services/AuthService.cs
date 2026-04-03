@@ -14,7 +14,7 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace DomoLibri.Infrastructure.Services;
 
-public class AuthService : IAuthService
+public partial class AuthService : IAuthService
 {
     private readonly DomoLibriDbContext _context;
     private readonly IConfiguration _configuration;
@@ -134,14 +134,13 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Credenciais inválidas.");
         }
 
-        // 3. Reset lockout state on successful login
+        // 3. Reset lockout state on successful login (only persist if there is something to clear)
         if (user.AcessosFalhos > 0 || user.BloqueioAte.HasValue)
         {
             user.AcessosFalhos = 0;
             user.BloqueioAte = null;
+            await _context.SaveChangesAsync();
         }
-
-        await _context.SaveChangesAsync();
 
         var token = GenerateJwt(user);
         return new LoginResult(token);
@@ -227,13 +226,21 @@ public class AuthService : IAuthService
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(u => u.Email == email);
 
-        if (user is null || user.TokenRedefinicaoSenha != HashToken(dto.Token))
+        if (user is null)
+            throw new InvalidOperationException("Link de redefinição inválido.");
+
+        // Explicit check: link was already consumed (token cleared after successful use)
+        if (user.TokenRedefinicaoSenha is null && user.SenhaAlteradaEm.HasValue)
+            throw new InvalidOperationException("Este link já foi utilizado. Solicite um novo link se necessário.");
+
+        if (user.TokenRedefinicaoSenha != HashToken(dto.Token))
             throw new InvalidOperationException("Link de redefinição inválido.");
 
         if (user.ExpiracaoTokenRedefinicaoSenha < DateTime.UtcNow)
             throw new InvalidOperationException("Link de redefinição expirado. Solicite um novo.");
 
         user.SenhaHash = BCrypt.Net.BCrypt.HashPassword(dto.NovaSenha);
+        user.SenhaAlteradaEm = DateTime.UtcNow;
         user.TokenRedefinicaoSenha = null;
         user.ExpiracaoTokenRedefinicaoSenha = null;
 
@@ -243,8 +250,8 @@ public class AuthService : IAuthService
     private string GenerateJwt(UsuarioEditora user)
     {
         var jwtSection = _configuration.GetSection("Jwt");
-        var secret = jwtSection["Secret"]!;
-        
+        var secret = jwtSection["Secret"] ?? string.Empty;
+
         if (secret.Length < 32)
             throw new InvalidOperationException("JWT Secret must be at least 32 characters long.");
 
@@ -259,6 +266,7 @@ public class AuthService : IAuthService
         {
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
+            new Claim(JwtRegisteredClaimNames.Name, user.Nome),
             new Claim(ClaimTypes.Role, user.Role.ToString()),
             new Claim("tenant_id", user.EditoraId.ToString())
         };
@@ -289,17 +297,28 @@ public class AuthService : IAuthService
     {
         var slug = nome.ToLowerInvariant().Trim();
 
-        slug = Regex.Replace(slug, @"[àáâãäå]", "a");
-        slug = Regex.Replace(slug, @"[èéêë]", "e");
-        slug = Regex.Replace(slug, @"[ìíîï]", "i");
-        slug = Regex.Replace(slug, @"[òóôõö]", "o");
-        slug = Regex.Replace(slug, @"[ùúûü]", "u");
-        slug = Regex.Replace(slug, @"[ç]", "c");
-        slug = Regex.Replace(slug, @"[ñ]", "n");
-        slug = Regex.Replace(slug, @"[^a-z0-9\s-]", "");
-        slug = Regex.Replace(slug, @"\s+", "-");
-        slug = Regex.Replace(slug, @"-+", "-").Trim('-');
+        slug = SlugRegexA().Replace(slug, "a");
+        slug = SlugRegexE().Replace(slug, "e");
+        slug = SlugRegexI().Replace(slug, "i");
+        slug = SlugRegexO().Replace(slug, "o");
+        slug = SlugRegexU().Replace(slug, "u");
+        slug = SlugRegexC().Replace(slug, "c");
+        slug = SlugRegexN().Replace(slug, "n");
+        slug = SlugRegexNonSlug().Replace(slug, "");
+        slug = SlugRegexSpaces().Replace(slug, "-");
+        slug = SlugRegexDashes().Replace(slug, "-").Trim('-');
 
         return slug;
     }
+
+    [GeneratedRegex(@"[àáâãäå]")] private static partial Regex SlugRegexA();
+    [GeneratedRegex(@"[èéêë]")]   private static partial Regex SlugRegexE();
+    [GeneratedRegex(@"[ìíîï]")]   private static partial Regex SlugRegexI();
+    [GeneratedRegex(@"[òóôõö]")]  private static partial Regex SlugRegexO();
+    [GeneratedRegex(@"[ùúûü]")]   private static partial Regex SlugRegexU();
+    [GeneratedRegex(@"[ç]")]      private static partial Regex SlugRegexC();
+    [GeneratedRegex(@"[ñ]")]      private static partial Regex SlugRegexN();
+    [GeneratedRegex(@"[^a-z0-9\s\-]")] private static partial Regex SlugRegexNonSlug();
+    [GeneratedRegex(@"\s+")]      private static partial Regex SlugRegexSpaces();
+    [GeneratedRegex(@"\-+")]      private static partial Regex SlugRegexDashes();
 }

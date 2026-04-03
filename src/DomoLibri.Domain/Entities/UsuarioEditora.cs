@@ -23,6 +23,7 @@ public class UsuarioEditora
 
     public string? TokenRedefinicaoSenha { get; set; }
     public DateTime? ExpiracaoTokenRedefinicaoSenha { get; set; }
+    public DateTime? SenhaAlteradaEm { get; set; }
 
     // Account Lockout tracking
     public int AcessosFalhos { get; set; }

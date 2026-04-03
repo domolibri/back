@@ -224,17 +224,21 @@ public class AuthController : ControllerBase
 
         var brandingConfigurado = false;
         string? nomeEditora = null;
+        string? logoUrl = null;
+        string? corPrimaria = null;
         if (Guid.TryParse(tenantId, out var editoraId))
         {
             var editora = await _db.Editoras.FindAsync(editoraId);
             if (editora is not null)
             {
                 nomeEditora = editora.Nome;
-                brandingConfigurado = editora.LogoUrl is not null || editora.CorPrimaria is not null;
+                logoUrl = editora.LogoUrl;
+                corPrimaria = editora.CorPrimaria;
+                brandingConfigurado = logoUrl is not null || corPrimaria is not null;
             }
         }
 
-        return Ok(new { tenantId, email, nome, nomeEditora, brandingConfigurado });
+        return Ok(new { tenantId, email, nome, nomeEditora, brandingConfigurado, logoUrl, corPrimaria });
     }
 
     /// <summary>

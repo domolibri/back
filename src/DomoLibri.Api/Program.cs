@@ -5,6 +5,8 @@ using DomoLibri.Domain.Settings;
 using DomoLibri.Infrastructure.Services;
 using DomoLibri.Infrastructure.Data;
 using DomoLibri.Api;
+using Hangfire;
+using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,12 +17,62 @@ using System.Threading.RateLimiting;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// ---------------------------------------------------------------------------
+// JWT Secret validation
+// Precedence: env var (Jwt__Secret) > User Secrets (dev) > appsettings.json
+// In production the secret MUST be injected via environment variable.
+// Example: export Jwt__Secret="your-strong-secret-min-32-chars"
+// ---------------------------------------------------------------------------
+var jwtSecret = builder.Configuration["Jwt:Secret"];
+var jwtSecretValid = !string.IsNullOrWhiteSpace(jwtSecret) && jwtSecret.Length >= 32;
+
+if (!jwtSecretValid)
+{
+    const string msg = "Jwt:Secret não está configurado ou tem menos de 32 caracteres. " +
+                       "Em produção, defina a variável de ambiente Jwt__Secret. " +
+                       "Em desenvolvimento, use: dotnet user-secrets set \"Jwt:Secret\" \"<segredo>\"";
+
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(msg);
+
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.Error.WriteLine($"[AVISO DE SEGURANÇA] {msg}");
+    Console.ResetColor();
+}
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// CORS Origins validation
+// Configure: AllowedOrigins=https://app.domolibri.com.br,https://www.domolibri.com.br
+// In production this MUST be set via environment variable (AllowedOrigins=...).
+// ---------------------------------------------------------------------------
+var allowedOriginsRaw = builder.Configuration["AllowedOrigins"];
+var allowedOrigins = allowedOriginsRaw?
+    .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+if (allowedOrigins is null or { Length: 0 })
+{
+    const string msg = "AllowedOrigins não está configurado. " +
+                       "Em produção, defina a variável de ambiente AllowedOrigins com as origens permitidas separadas por vírgula. " +
+                       "Em desenvolvimento, adicione AllowedOrigins ao appsettings.Development.json ou User Secrets.";
+
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(msg);
+
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.Error.WriteLine($"[AVISO DE SEGURANÇA] {msg}");
+    Console.ResetColor();
+
+    allowedOrigins = ["http://localhost:4200"];
+}
+// ---------------------------------------------------------------------------
+
 // 1. Configure CORS
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("DefaultPolicy", policy =>
     {
-        policy.WithOrigins(builder.Configuration["AllowedOrigins"]?.Split(',') ?? new[] { "http://localhost:4200" })
+        policy.WithOrigins(allowedOrigins)
               .AllowAnyMethod()
               .AllowAnyHeader()
               .AllowCredentials(); // Required for HttpOnly Cookies
@@ -93,11 +145,23 @@ builder.Services.AddScoped<ITenantProvider, HttpTenantProvider>();
 builder.Services.AddScoped<IStorageService, BlobStorageService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Smtp"));
-builder.Services.AddScoped<IEmailService, EmailService>();
+// SmtpEmailService is registered as itself so Hangfire can resolve it as a job type.
+builder.Services.AddScoped<SmtpEmailService>();
+// IEmailService resolves to BackgroundEmailService, which enqueues jobs instead of sending inline.
+builder.Services.AddScoped<IEmailService, BackgroundEmailService>();
+
+// Configure Hangfire with PostgreSQL storage (reuses the application database).
+builder.Services.AddHangfire(config => config
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UsePostgreSqlStorage(c =>
+        c.UseNpgsqlConnection(builder.Configuration.GetConnectionString("DefaultConnection"))));
+builder.Services.AddHangfireServer();
 
 // Configure JWT authentication
 var jwtSection = builder.Configuration.GetSection("Jwt");
-var secret = jwtSection["Secret"]!;
+var secret = jwtSection["Secret"] ?? string.Empty;
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -169,6 +233,8 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    // Hangfire Dashboard exposed only in development (no auth required locally).
+    app.UseHangfireDashboard("/hangfire");
 }
 else
 {

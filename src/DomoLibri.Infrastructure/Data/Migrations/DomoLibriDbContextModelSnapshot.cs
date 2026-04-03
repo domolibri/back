@@ -94,6 +94,9 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                     b.Property<int>("Role")
                         .HasColumnType("integer");
 
+                    b.Property<DateTime?>("SenhaAlteradaEm")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("SenhaHash")
                         .IsRequired()
                         .HasColumnType("text");

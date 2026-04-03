@@ -12,7 +12,7 @@ public class BlobStorageService : IStorageService
 {
     private const string ContainerName = "editoras-logos";
 
-    private readonly BlobServiceClient _blobServiceClient;
+    private readonly Lazy<Task<BlobContainerClient>> _containerClient;
     private readonly string? _publicEndpoint;
 
     public BlobStorageService(IConfiguration configuration)
@@ -20,19 +20,26 @@ public class BlobStorageService : IStorageService
         var connectionString = configuration.GetConnectionString("BlobStorage")
             ?? throw new InvalidOperationException("Connection string 'BlobStorage' not found.");
 
-        _blobServiceClient = new BlobServiceClient(connectionString);
+        var blobServiceClient = new BlobServiceClient(connectionString);
 
         // Optional public endpoint used to rewrite blob URLs for browser access.
         // Required when the internal upload endpoint (e.g. http://azurite:10000) differs
         // from the publicly accessible URL (e.g. http://localhost:10000).
         _publicEndpoint = configuration["BlobStorage:PublicEndpoint"]?.TrimEnd('/');
+
+        // CreateIfNotExistsAsync is called exactly once: on the first upload.
+        // All subsequent calls await the already-completed Task at negligible cost.
+        _containerClient = new Lazy<Task<BlobContainerClient>>(async () =>
+        {
+            var client = blobServiceClient.GetBlobContainerClient(ContainerName);
+            await client.CreateIfNotExistsAsync(PublicAccessType.Blob);
+            return client;
+        });
     }
 
     public async Task<string> UploadLogoAsync(IFormFile logoFile, Guid tenantId)
     {
-        var containerClient = _blobServiceClient.GetBlobContainerClient(ContainerName);
-
-        await containerClient.CreateIfNotExistsAsync(PublicAccessType.Blob);
+        var containerClient = await _containerClient.Value;
 
         var extension = Path.GetExtension(logoFile.FileName);
         var blobName = $"{tenantId}/{Guid.NewGuid()}{extension}";

@@ -10,12 +10,12 @@ using System.Net;
 namespace DomoLibri.Infrastructure.Services;
 
 [ExcludeFromCodeCoverage(Justification = "Requires live SMTP server — covered by integration tests")]
-public class EmailService : IEmailService
+public class SmtpEmailService : IEmailService
 {
     private readonly EmailSettings _emailSettings;
 
     // Recebe as configurações via Injeção de Dependência (Options Pattern)
-    public EmailService(IOptions<EmailSettings> emailSettings)
+    public SmtpEmailService(IOptions<EmailSettings> emailSettings)
     {
         _emailSettings = emailSettings.Value;
     }
