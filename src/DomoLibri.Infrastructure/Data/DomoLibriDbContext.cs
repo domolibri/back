@@ -1,4 +1,5 @@
 ﻿using DomoLibri.Domain.Entities;
+using DomoLibri.Domain.Enums;
 using Microsoft.EntityFrameworkCore;
 
 namespace DomoLibri.Infrastructure.Data;
@@ -26,6 +27,7 @@ public class DomoLibriDbContext : DbContext
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<ConsentimentoLGPD> ConsentimentosLGPD => Set<ConsentimentoLGPD>();
+    public DbSet<ConviteUsuario> Convites => Set<ConviteUsuario>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +44,9 @@ public class DomoLibriDbContext : DbContext
             .HasQueryFilter(a => a.EditoraId == _tenantProvider.GetTenantId());
 
         modelBuilder.Entity<ConsentimentoLGPD>()
+            .HasQueryFilter(c => c.EditoraId == _tenantProvider.GetTenantId());
+
+        modelBuilder.Entity<ConviteUsuario>()
             .HasQueryFilter(c => c.EditoraId == _tenantProvider.GetTenantId());
 
         // 2. Entity Configurations
@@ -120,6 +125,38 @@ public class DomoLibriDbContext : DbContext
                   .WithMany()
                   .HasForeignKey(c => c.EditoraId)
                   .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<ConviteUsuario>(entity =>
+        {
+            entity.HasKey(c => c.Id);
+
+            // Token is the invite-link key – must be globally unique
+            entity.HasIndex(c => c.Token).IsUnique();
+
+            // Prevent duplicate invites for the same email within a tenant
+            entity.HasIndex(c => new { c.EditoraId, c.Email });
+
+            // Persist the enum as an integer column
+            entity.Property(c => c.Status)
+                  .HasConversion<int>();
+
+            entity.HasOne(c => c.Editora)
+                  .WithMany()
+                  .HasForeignKey(c => c.EditoraId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            // Restrict: deleting a Role should not silently remove invite records
+            entity.HasOne(c => c.Role)
+                  .WithMany()
+                  .HasForeignKey(c => c.RoleId)
+                  .OnDelete(DeleteBehavior.Restrict);
+
+            // Restrict: preserve audit trail if the inviting user is removed
+            entity.HasOne(c => c.ConvidadoPor)
+                  .WithMany()
+                  .HasForeignKey(c => c.ConvidadoPorUsuarioId)
+                  .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }
