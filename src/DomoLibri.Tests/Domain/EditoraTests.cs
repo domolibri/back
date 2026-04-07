@@ -51,11 +51,11 @@ public class EditoraTests
     {
         var editoraId = Guid.NewGuid();
         var editora = new Editora { Id = editoraId };
-        var usuario = new UsuarioEditora
+        var usuario = new VinculoUsuarioEditora
         {
             Id = Guid.NewGuid(),
             EditoraId = editoraId,
-            Email = "admin@teste.com"
+            UsuarioId = Guid.NewGuid()
         };
 
         editora.Usuarios.Add(usuario);

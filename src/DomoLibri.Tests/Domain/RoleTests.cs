@@ -55,7 +55,7 @@ public class RoleTests
     public void Role_Usuarios_CanAddItems()
     {
         var role = new Role { Id = Guid.NewGuid(), Nome = "Editor" };
-        var usuario = new UsuarioEditora { Id = Guid.NewGuid(), Email = "u@editora.com" };
+        var usuario = new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = Guid.NewGuid(), UsuarioId = Guid.NewGuid() };
 
         role.Usuarios.Add(usuario);
 

@@ -11,5 +11,5 @@ public class Role
     public string? Descricao { get; set; }
 
     public ICollection<Permission> Permissions { get; set; } = new List<Permission>();
-    public ICollection<UsuarioEditora> Usuarios { get; set; } = new List<UsuarioEditora>();
+    public ICollection<VinculoUsuarioEditora> Usuarios { get; set; } = new List<VinculoUsuarioEditora>();
 }

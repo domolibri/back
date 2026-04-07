@@ -22,7 +22,8 @@ public class DomoLibriDbContext : DbContext
     }
 
     public DbSet<Editora> Editoras => Set<Editora>();
-    public DbSet<UsuarioEditora> UsuariosEditora => Set<UsuarioEditora>();
+    public DbSet<Usuario> Usuarios => Set<Usuario>();
+    public DbSet<VinculoUsuarioEditora> VinculosUsuarioEditora => Set<VinculoUsuarioEditora>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
@@ -34,8 +35,9 @@ public class DomoLibriDbContext : DbContext
         base.OnModelCreating(modelBuilder);
 
         // 1. Global Query Filters for Multi-Tenancy
-        modelBuilder.Entity<UsuarioEditora>()
-            .HasQueryFilter(u => u.EditoraId == _tenantProvider.GetTenantId());
+        //    Usuario is a GLOBAL entity — no tenant filter.
+        modelBuilder.Entity<VinculoUsuarioEditora>()
+            .HasQueryFilter(v => v.EditoraId == _tenantProvider.GetTenantId());
 
         modelBuilder.Entity<Role>()
             .HasQueryFilter(r => r.EditoraId == _tenantProvider.GetTenantId());
@@ -53,26 +55,43 @@ public class DomoLibriDbContext : DbContext
         modelBuilder.Entity<Editora>(entity =>
         {
             entity.HasKey(e => e.Id);
-            entity.HasIndex(e => e.Slug).IsUnique(); // Slug must be unique
+            entity.HasIndex(e => e.Slug).IsUnique();
         });
 
-        modelBuilder.Entity<UsuarioEditora>(entity =>
+        // Usuario: global table, Email unique across all tenants
+        modelBuilder.Entity<Usuario>(entity =>
         {
             entity.HasKey(u => u.Id);
+            entity.HasIndex(u => u.Email).IsUnique();
+        });
 
-            // Email must be unique per tenant (Editora)
-            entity.HasIndex(u => new { u.Email, u.EditoraId }).IsUnique();
+        modelBuilder.Entity<VinculoUsuarioEditora>(entity =>
+        {
+            entity.ToTable("VinculosUsuarioEditora");
+            entity.HasKey(v => v.Id);
 
-            // Relationship setup
-            entity.HasOne(u => u.Editora)
+            // Index for tenant-scoped lookups
+            entity.HasIndex(v => v.EditoraId);
+
+            // Relationship: N:1 to global Usuario
+            entity.HasOne(v => v.Usuario)
+                  .WithMany(u => u.Vinculos)
+                  .HasForeignKey(v => v.UsuarioId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            // Relationship: N:1 to Editora
+            entity.HasOne(v => v.Editora)
                   .WithMany(e => e.Usuarios)
-                  .HasForeignKey(u => u.EditoraId)
+                  .HasForeignKey(v => v.EditoraId)
                   .OnDelete(DeleteBehavior.Restrict);
 
-            // N:N with Role via UsuarioRoles junction table
-            entity.HasMany(u => u.Roles)
+            // N:N with Role via VinculoRoles junction table
+            entity.HasMany(v => v.Roles)
                   .WithMany(r => r.Usuarios)
-                  .UsingEntity(j => j.ToTable("UsuarioRoles"));
+                  .UsingEntity(j => j.ToTable("VinculoRoles"));
+
+            entity.Property(v => v.TipoVinculo)
+                  .HasConversion<int>();
         });
 
         modelBuilder.Entity<Role>(entity =>
@@ -99,14 +118,8 @@ public class DomoLibriDbContext : DbContext
         modelBuilder.Entity<AuditLog>(entity =>
         {
             entity.HasKey(a => a.Id);
-
-            // Index for per-tenant queries
             entity.HasIndex(a => a.EditoraId);
-
-            // Index for time-range queries
             entity.HasIndex(a => a.DataHora);
-
-            // Composite index for the most common pattern: tenant logs in a time range
             entity.HasIndex(a => new { a.EditoraId, a.DataHora });
         });
 
@@ -116,7 +129,9 @@ public class DomoLibriDbContext : DbContext
             entity.HasIndex(c => c.UsuarioId);
             entity.HasIndex(c => c.EditoraId);
 
-            entity.HasOne<UsuarioEditora>()
+            // UsuarioId references the binding (VinculoUsuarioEditora), preserving FK integrity
+            // across migrations since VinculoUsuarioEditora.Id = old UsuarioEditora.Id.
+            entity.HasOne<VinculoUsuarioEditora>()
                   .WithMany()
                   .HasForeignKey(c => c.UsuarioId)
                   .OnDelete(DeleteBehavior.Cascade);
@@ -130,14 +145,9 @@ public class DomoLibriDbContext : DbContext
         modelBuilder.Entity<ConviteUsuario>(entity =>
         {
             entity.HasKey(c => c.Id);
-
-            // Token is the invite-link key – must be globally unique
             entity.HasIndex(c => c.Token).IsUnique();
-
-            // Prevent duplicate invites for the same email within a tenant
             entity.HasIndex(c => new { c.EditoraId, c.Email });
 
-            // Persist the enum as an integer column
             entity.Property(c => c.Status)
                   .HasConversion<int>();
 
@@ -146,13 +156,11 @@ public class DomoLibriDbContext : DbContext
                   .HasForeignKey(c => c.EditoraId)
                   .OnDelete(DeleteBehavior.Cascade);
 
-            // Restrict: deleting a Role should not silently remove invite records
             entity.HasOne(c => c.Role)
                   .WithMany()
                   .HasForeignKey(c => c.RoleId)
                   .OnDelete(DeleteBehavior.Restrict);
 
-            // Restrict: preserve audit trail if the inviting user is removed
             entity.HasOne(c => c.ConvidadoPor)
                   .WithMany()
                   .HasForeignKey(c => c.ConvidadoPorUsuarioId)

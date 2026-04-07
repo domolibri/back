@@ -44,12 +44,12 @@ public class InvitationService : IInvitationService
 
         var email = dto.Email.Trim().ToLower();
 
-        // 1. Guard: email must not already belong to a user in this editora.
+        // 1. Guard: email must not already belong to a user with an active binding in this editora.
         //    Global query filter scopes the check to the current tenant automatically.
-        var jaUsuario = await _context.UsuariosEditora
-            .AnyAsync(u => u.Email == email);
+        var jaVinculado = await _context.VinculosUsuarioEditora
+            .AnyAsync(v => v.Usuario!.Email == email);
 
-        if (jaUsuario)
+        if (jaVinculado)
             throw new InvalidOperationException($"O e-mail '{email}' já pertence a um usuário desta editora.");
 
         // 2. Guard: no duplicate pending invite for this email within the tenant.
@@ -67,8 +67,9 @@ public class InvitationService : IInvitationService
             throw new InvalidOperationException("A role especificada não foi encontrada nesta editora.");
 
         // 4. Load inviter name for the e-mail body (scoped by global filter).
-        var inviter = await _context.UsuariosEditora
-            .FirstOrDefaultAsync(u => u.Id == inviterId)
+        var inviter = await _context.VinculosUsuarioEditora
+            .Include(v => v.Usuario)
+            .FirstOrDefaultAsync(v => v.Id == inviterId)
             ?? throw new InvalidOperationException("Usuário convidante não encontrado.");
 
         // 5. Load editora name (Editoras has no global filter – safe to use directly).
@@ -103,7 +104,7 @@ public class InvitationService : IInvitationService
         await _emailService.SendEmailAsync(
             email,
             subject,
-            BuildInviteEmailBody(inviter.Nome, editora.Nome, inviteLink, ExpiracaoConviteHoras));
+            BuildInviteEmailBody(inviter.Usuario?.Nome ?? inviter.Id.ToString(), editora.Nome, inviteLink, ExpiracaoConviteHoras));
 
         // 8. Audit log (best-effort: must never block the invite operation).
         await AddAuditLogAsync("ConviteEnviado", tenantId, inviterId, email, convite.Id);

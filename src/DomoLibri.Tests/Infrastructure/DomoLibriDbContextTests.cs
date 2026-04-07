@@ -1,4 +1,5 @@
 using DomoLibri.Domain.Entities;
+using DomoLibri.Domain.Enums;
 using DomoLibri.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -43,23 +44,26 @@ public class DomoLibriDbContextTests
             .UseInMemoryDatabase(dbName)
             .Options;
 
-        // Seed both users in the same in-memory DB
+        // Seed both vinculos in the same in-memory DB
         using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
         seedCtx.Editoras.AddRange(
             new Editora { Id = tenantId1, Nome = "E1", Slug = "e1-shared", DataCriacao = DateTime.UtcNow, Ativo = true },
             new Editora { Id = tenantId2, Nome = "E2", Slug = "e2-shared", DataCriacao = DateTime.UtcNow, Ativo = true }
         );
-        var u1 = new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, Email = "u1@e.com", SenhaHash = "h", Nome = "U1", Ativo = true };
-        var u2 = new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, Email = "u2@e.com", SenhaHash = "h", Nome = "U2", Ativo = true };
-        seedCtx.UsuariosEditora.AddRange(u1, u2);
+        var gu1 = new Usuario { Id = Guid.NewGuid(), Email = "u1@e.com", SenhaHash = "h", Nome = "U1" };
+        var gu2 = new Usuario { Id = Guid.NewGuid(), Email = "u2@e.com", SenhaHash = "h", Nome = "U2" };
+        var v1 = new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, UsuarioId = gu1.Id, Ativo = true };
+        var v2 = new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, UsuarioId = gu2.Id, Ativo = true };
+        seedCtx.Usuarios.AddRange(gu1, gu2);
+        seedCtx.VinculosUsuarioEditora.AddRange(v1, v2);
         await seedCtx.SaveChangesAsync();
 
         // Query with tenant1 filter
         using var ctx1 = new DomoLibriDbContext(opts, tenantProvider1.Object);
-        var users1 = await ctx1.UsuariosEditora.ToListAsync();
+        var vinculos1 = await ctx1.VinculosUsuarioEditora.ToListAsync();
 
-        Assert.Single(users1);
-        Assert.Equal(tenantId1, users1[0].EditoraId);
+        Assert.Single(vinculos1);
+        Assert.Equal(tenantId1, vinculos1[0].EditoraId);
     }
 
     [Fact]
@@ -81,17 +85,20 @@ public class DomoLibriDbContextTests
             new Editora { Id = tenantId1, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true },
             new Editora { Id = tenantId2, Nome = "E2", Slug = "e2", DataCriacao = DateTime.UtcNow, Ativo = true }
         );
-        seedCtx.UsuariosEditora.AddRange(
-            new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, Email = "u1@e.com", SenhaHash = "h", Nome = "U1", Ativo = true },
-            new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, Email = "u2@e.com", SenhaHash = "h", Nome = "U2", Ativo = true }
+        var gu1 = new Usuario { Id = Guid.NewGuid(), Email = "u1@e.com", SenhaHash = "h", Nome = "U1" };
+        var gu2 = new Usuario { Id = Guid.NewGuid(), Email = "u2@e.com", SenhaHash = "h", Nome = "U2" };
+        seedCtx.Usuarios.AddRange(gu1, gu2);
+        seedCtx.VinculosUsuarioEditora.AddRange(
+            new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, UsuarioId = gu1.Id, Ativo = true },
+            new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, UsuarioId = gu2.Id, Ativo = true }
         );
         await seedCtx.SaveChangesAsync();
 
         // With filter for tenant1, IgnoreQueryFilters should return all
         using var ctx = new DomoLibriDbContext(opts, tenantProvider.Object);
-        var allUsers = await ctx.UsuariosEditora.IgnoreQueryFilters().ToListAsync();
+        var allVinculos = await ctx.VinculosUsuarioEditora.IgnoreQueryFilters().ToListAsync();
 
-        Assert.Equal(2, allUsers.Count);
+        Assert.Equal(2, allVinculos.Count);
     }
 
     [Fact]
@@ -116,7 +123,7 @@ public class DomoLibriDbContextTests
     }
 
     [Fact]
-    public async Task DbSets_CanAddAndRetrieveUsuariosEditora()
+    public async Task DbSets_CanAddAndRetrieveVinculosUsuarioEditora()
     {
         var tenantId = Guid.NewGuid();
         using var db = CreateDbContext(tenantId);
@@ -124,21 +131,27 @@ public class DomoLibriDbContextTests
         var editora = new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true };
         db.Editoras.Add(editora);
 
-        var user = new UsuarioEditora
+        var usuario = new Usuario
+        {
+            Id = Guid.NewGuid(),
+            Email = "admin@test.com",
+            SenhaHash = "hash",
+            Nome = "Admin"
+        };
+        var vinculo = new VinculoUsuarioEditora
         {
             Id = Guid.NewGuid(),
             EditoraId = tenantId,
-            Email = "admin@test.com",
-            SenhaHash = "hash",
-            Nome = "Admin",
+            UsuarioId = usuario.Id,
             Ativo = true
         };
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        var found = await db.UsuariosEditora.FirstOrDefaultAsync(u => u.Id == user.Id);
+        var found = await db.VinculosUsuarioEditora.FirstOrDefaultAsync(v => v.Id == vinculo.Id);
         Assert.NotNull(found);
-        Assert.Equal("admin@test.com", found.Email);
+        Assert.Equal(tenantId, found.EditoraId);
     }
 
     [Fact]
@@ -155,7 +168,9 @@ public class DomoLibriDbContextTests
         seedProvider.Setup(t => t.GetTenantId()).Returns(tenantId);
         using var seedCtx = new DomoLibriDbContext(opts, seedProvider.Object);
         seedCtx.Editoras.Add(new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true });
-        seedCtx.UsuariosEditora.Add(new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId, Email = "u@e.com", SenhaHash = "h", Nome = "U", Ativo = true });
+        var gu = new Usuario { Id = Guid.NewGuid(), Email = "u@e.com", SenhaHash = "h", Nome = "U" };
+        seedCtx.Usuarios.Add(gu);
+        seedCtx.VinculosUsuarioEditora.Add(new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId, UsuarioId = gu.Id, Ativo = true });
         await seedCtx.SaveChangesAsync();
 
         // Query with null tenantId — filter becomes EditoraId == null, which matches nothing
@@ -163,8 +178,8 @@ public class DomoLibriDbContextTests
         nullProvider.Setup(t => t.GetTenantId()).Returns((Guid?)null);
         using var ctx = new DomoLibriDbContext(opts, nullProvider.Object);
 
-        var users = await ctx.UsuariosEditora.ToListAsync();
-        Assert.Empty(users);
+        var vinculos = await ctx.VinculosUsuarioEditora.ToListAsync();
+        Assert.Empty(vinculos);
     }
 
     // ─── AuditLog ─────────────────────────────────────────────────────────────
@@ -181,7 +196,7 @@ public class DomoLibriDbContextTests
             EditoraId = tenantId,
             UsuarioId = Guid.NewGuid(),
             Acao = "Login",
-            Recurso = "UsuarioEditora",
+            Recurso = "VinculoUsuarioEditora",
             RecursoId = Guid.NewGuid().ToString(),
             IP = "127.0.0.1",
             UserAgent = "TestAgent/1.0",
@@ -213,7 +228,7 @@ public class DomoLibriDbContextTests
         // Seed logs for both tenants
         using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
         seedCtx.AuditLogs.AddRange(
-            new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant1, Acao = "Login", Recurso = "UsuarioEditora", RecursoId = "r1", IP = "1.1.1.1", UserAgent = "UA", DataHora = DateTime.UtcNow },
+            new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant1, Acao = "Login", Recurso = "VinculoUsuarioEditora", RecursoId = "r1", IP = "1.1.1.1", UserAgent = "UA", DataHora = DateTime.UtcNow },
             new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant2, Acao = "Insert", Recurso = "Role", RecursoId = "r2", IP = "2.2.2.2", UserAgent = "UA", DataHora = DateTime.UtcNow }
         );
         await seedCtx.SaveChangesAsync();
@@ -272,7 +287,7 @@ public class DomoLibriDbContextTests
 
         using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
         seedCtx.AuditLogs.AddRange(
-            new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant1, Acao = "Login", Recurso = "UsuarioEditora", RecursoId = "r1", IP = "1.1.1.1", UserAgent = "UA", DataHora = DateTime.UtcNow },
+            new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant1, Acao = "Login", Recurso = "VinculoUsuarioEditora", RecursoId = "r1", IP = "1.1.1.1", UserAgent = "UA", DataHora = DateTime.UtcNow },
             new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant2, Acao = "Insert", Recurso = "Role", RecursoId = "r2", IP = "2.2.2.2", UserAgent = "UA", DataHora = DateTime.UtcNow },
             new AuditLog { Id = Guid.NewGuid(), EditoraId = null, Acao = "SystemEvent", Recurso = "System", RecursoId = "sys", IP = "0.0.0.0", UserAgent = "System", DataHora = DateTime.UtcNow }
         );
@@ -292,17 +307,20 @@ public class DomoLibriDbContextTests
     public async Task ConsentimentoLGPD_CanAddAndRetrieve()
     {
         var tenantId = Guid.NewGuid();
-        var usuarioId = Guid.NewGuid();
         using var db = CreateDbContext(tenantId);
 
-        db.Editoras.Add(new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true });
-        db.UsuariosEditora.Add(new UsuarioEditora { Id = usuarioId, EditoraId = tenantId, Email = "u@e.com", SenhaHash = "h", Nome = "U", Ativo = true });
+        var editora = new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true };
+        var usuario = new Usuario { Id = Guid.NewGuid(), Email = "u@e.com", SenhaHash = "h", Nome = "U" };
+        var vinculo = new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId, UsuarioId = usuario.Id, Ativo = true };
+        db.Editoras.Add(editora);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
 
         var consentimento = new ConsentimentoLGPD
         {
             Id = Guid.NewGuid(),
             EditoraId = tenantId,
-            UsuarioId = usuarioId,
+            UsuarioId = vinculo.Id,
             TipoConsentimento = "TermosDeUso",
             VersaoTermo = "1.0",
             DataConsentimento = DateTime.UtcNow
@@ -314,7 +332,7 @@ public class DomoLibriDbContextTests
         Assert.NotNull(found);
         Assert.Equal("TermosDeUso", found.TipoConsentimento);
         Assert.Equal("1.0", found.VersaoTermo);
-        Assert.Equal(usuarioId, found.UsuarioId);
+        Assert.Equal(vinculo.Id, found.UsuarioId);
         Assert.Equal(tenantId, found.EditoraId);
     }
 
@@ -335,10 +353,12 @@ public class DomoLibriDbContextTests
             new Editora { Id = tenant1, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true },
             new Editora { Id = tenant2, Nome = "E2", Slug = "e2", DataCriacao = DateTime.UtcNow, Ativo = true }
         );
-        seedCtx.UsuariosEditora.AddRange(
-            new UsuarioEditora { Id = user1, EditoraId = tenant1, Email = "u1@e.com", SenhaHash = "h", Nome = "U1", Ativo = true },
-            new UsuarioEditora { Id = user2, EditoraId = tenant2, Email = "u2@e.com", SenhaHash = "h", Nome = "U2", Ativo = true }
-        );
+        var gu1 = new Usuario { Id = Guid.NewGuid(), Email = "u1@e.com", SenhaHash = "h", Nome = "U1" };
+        var gu2 = new Usuario { Id = Guid.NewGuid(), Email = "u2@e.com", SenhaHash = "h", Nome = "U2" };
+        var v1 = new VinculoUsuarioEditora { Id = user1, EditoraId = tenant1, UsuarioId = gu1.Id, Ativo = true };
+        var v2 = new VinculoUsuarioEditora { Id = user2, EditoraId = tenant2, UsuarioId = gu2.Id, Ativo = true };
+        seedCtx.Usuarios.AddRange(gu1, gu2);
+        seedCtx.VinculosUsuarioEditora.AddRange(v1, v2);
         seedCtx.ConsentimentosLGPD.AddRange(
             new ConsentimentoLGPD { Id = Guid.NewGuid(), EditoraId = tenant1, UsuarioId = user1, TipoConsentimento = "TermosDeUso", VersaoTermo = "1.0", DataConsentimento = DateTime.UtcNow },
             new ConsentimentoLGPD { Id = Guid.NewGuid(), EditoraId = tenant2, UsuarioId = user2, TipoConsentimento = "TermosDeUso", VersaoTermo = "1.0", DataConsentimento = DateTime.UtcNow }
@@ -354,4 +374,3 @@ public class DomoLibriDbContextTests
         Assert.Equal(tenant1, consents[0].EditoraId);
     }
 }
-

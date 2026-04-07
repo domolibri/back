@@ -1,98 +1,75 @@
 using DomoLibri.Domain.Entities;
+using DomoLibri.Domain.Enums;
 
 namespace DomoLibri.Tests.Domain;
 
-public class UsuarioEditoraTests
+public class VinculoUsuarioEditoraTests
 {
     [Fact]
-    public void UsuarioEditora_DefaultValues_AreCorrect()
+    public void VinculoUsuarioEditora_DefaultValues_AreCorrect()
     {
-        var usuario = new UsuarioEditora();
+        var vinculo = new VinculoUsuarioEditora();
 
-        Assert.Equal(Guid.Empty, usuario.Id);
-        Assert.Equal(Guid.Empty, usuario.EditoraId);
-        Assert.Equal(string.Empty, usuario.Email);
-        Assert.Equal(string.Empty, usuario.SenhaHash);
-        Assert.Equal(string.Empty, usuario.Nome);
-        Assert.False(usuario.Ativo);
-        Assert.False(usuario.EmailConfirmado);
-        Assert.Null(usuario.TokenConfirmacao);
-        Assert.Null(usuario.ExpiracaoToken);
-        Assert.Null(usuario.TokenRedefinicaoSenha);
-        Assert.Null(usuario.ExpiracaoTokenRedefinicaoSenha);
-        Assert.Equal(0, usuario.AcessosFalhos);
-        Assert.Null(usuario.BloqueioAte);
-        Assert.Null(usuario.Editora);
-        Assert.NotNull(usuario.Roles);
-        Assert.Empty(usuario.Roles);
+        Assert.Equal(Guid.Empty, vinculo.Id);
+        Assert.Equal(Guid.Empty, vinculo.EditoraId);
+        Assert.Equal(Guid.Empty, vinculo.UsuarioId);
+        Assert.False(vinculo.Ativo);
+        Assert.Equal(TipoVinculo.Colaborador, vinculo.TipoVinculo);
+        Assert.Null(vinculo.Usuario);
+        Assert.Null(vinculo.Editora);
+        Assert.NotNull(vinculo.Roles);
+        Assert.Empty(vinculo.Roles);
     }
 
     [Fact]
-    public void UsuarioEditora_PropertiesCanBeSet()
+    public void VinculoUsuarioEditora_PropertiesCanBeSet()
     {
         var id = Guid.NewGuid();
         var editoraId = Guid.NewGuid();
-        var now = DateTime.UtcNow;
+        var usuarioId = Guid.NewGuid();
+        var dataEntrada = DateTime.UtcNow;
 
-        var usuario = new UsuarioEditora
+        var vinculo = new VinculoUsuarioEditora
         {
             Id = id,
             EditoraId = editoraId,
-            Email = "usuario@editora.com",
-            SenhaHash = "hashed_password",
-            Nome = "Usuário Teste",
+            UsuarioId = usuarioId,
             Ativo = true,
-            EmailConfirmado = true,
-            TokenConfirmacao = "abc123token",
-            ExpiracaoToken = now.AddHours(24),
-            TokenRedefinicaoSenha = "resettoken456",
-            ExpiracaoTokenRedefinicaoSenha = now.AddHours(1),
-            AcessosFalhos = 3,
-            BloqueioAte = now.AddMinutes(15)
+            DataEntrada = dataEntrada,
+            TipoVinculo = TipoVinculo.Administrador
         };
 
-        Assert.Equal(id, usuario.Id);
-        Assert.Equal(editoraId, usuario.EditoraId);
-        Assert.Equal("usuario@editora.com", usuario.Email);
-        Assert.Equal("hashed_password", usuario.SenhaHash);
-        Assert.Equal("Usuário Teste", usuario.Nome);
-        Assert.True(usuario.Ativo);
-        Assert.True(usuario.EmailConfirmado);
-        Assert.Equal("abc123token", usuario.TokenConfirmacao);
-        Assert.Equal(now.AddHours(24), usuario.ExpiracaoToken);
-        Assert.Equal("resettoken456", usuario.TokenRedefinicaoSenha);
-        Assert.Equal(now.AddHours(1), usuario.ExpiracaoTokenRedefinicaoSenha);
-        Assert.Equal(3, usuario.AcessosFalhos);
-        Assert.Equal(now.AddMinutes(15), usuario.BloqueioAte);
+        Assert.Equal(id, vinculo.Id);
+        Assert.Equal(editoraId, vinculo.EditoraId);
+        Assert.Equal(usuarioId, vinculo.UsuarioId);
+        Assert.True(vinculo.Ativo);
+        Assert.Equal(dataEntrada, vinculo.DataEntrada);
+        Assert.Equal(TipoVinculo.Administrador, vinculo.TipoVinculo);
     }
 
     [Fact]
-    public void UsuarioEditora_NavigationProperty_CanBeSet()
+    public void VinculoUsuarioEditora_NavigationProperties_CanBeSet()
     {
         var editora = new Editora { Id = Guid.NewGuid(), Nome = "Editora" };
-        var usuario = new UsuarioEditora { Editora = editora };
+        var usuario = new Usuario { Id = Guid.NewGuid(), Nome = "Teste", Email = "test@test.com" };
 
-        Assert.NotNull(usuario.Editora);
-        Assert.Equal(editora.Id, usuario.Editora.Id);
+        var vinculo = new VinculoUsuarioEditora
+        {
+            Editora = editora,
+            Usuario = usuario
+        };
+
+        Assert.NotNull(vinculo.Editora);
+        Assert.Equal(editora.Id, vinculo.Editora.Id);
+        Assert.NotNull(vinculo.Usuario);
+        Assert.Equal(usuario.Id, vinculo.Usuario.Id);
     }
 
     [Fact]
-    public void UsuarioEditora_Lockout_TracksCorrectly()
+    public void VinculoUsuarioEditora_TipoVinculo_HasCorrectValues()
     {
-        var usuario = new UsuarioEditora();
-        var bloqueioAte = DateTime.UtcNow.AddMinutes(15);
-
-        usuario.AcessosFalhos = 5;
-        usuario.BloqueioAte = bloqueioAte;
-
-        Assert.Equal(5, usuario.AcessosFalhos);
-        Assert.Equal(bloqueioAte, usuario.BloqueioAte);
-
-        // Simula reset após desbloqueio
-        usuario.AcessosFalhos = 0;
-        usuario.BloqueioAte = null;
-
-        Assert.Equal(0, usuario.AcessosFalhos);
-        Assert.Null(usuario.BloqueioAte);
+        Assert.Equal(0, (int)TipoVinculo.Administrador);
+        Assert.Equal(1, (int)TipoVinculo.Colaborador);
+        Assert.Equal(2, (int)TipoVinculo.Convidado);
     }
 }

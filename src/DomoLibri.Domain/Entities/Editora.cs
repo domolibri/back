@@ -14,5 +14,5 @@ public class Editora
     public bool Ativo { get; set; }
 
     // Navigation property for EF Core
-    public ICollection<UsuarioEditora> Usuarios { get; set; } = new List<UsuarioEditora>();
+    public ICollection<VinculoUsuarioEditora> Usuarios { get; set; } = new List<VinculoUsuarioEditora>();
 }

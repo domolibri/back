@@ -1,39 +1,30 @@
-using DomoLibri.Domain.Attributes;
+using DomoLibri.Domain.Enums;
 
 namespace DomoLibri.Domain.Entities;
 
-public class UsuarioEditora
+/// <summary>
+/// Represents a user's membership within a specific Editora (tenant).
+/// Identity and credentials live in <see cref="Usuario"/>; this entity carries only the
+/// per-tenant binding data (role, status, join date).
+/// </summary>
+public class VinculoUsuarioEditora
 {
-    // Primary key
     public Guid Id { get; set; }
 
     // Foreign key for multi-tenancy isolation
     public Guid EditoraId { get; set; }
 
-    public string Email { get; set; } = string.Empty;
-
-    [SensitiveData]
-    public string SenhaHash { get; set; } = string.Empty;
-    public string Nome { get; set; } = string.Empty;
+    // Foreign key to the global user identity
+    public Guid UsuarioId { get; set; }
 
     public bool Ativo { get; set; }
 
-    public bool EmailConfirmado { get; set; }
+    public DateTime DataEntrada { get; set; } = DateTime.UtcNow;
 
-    [SensitiveData]
-    public string? TokenConfirmacao { get; set; }
-    public DateTime? ExpiracaoToken { get; set; }
-
-    [SensitiveData]
-    public string? TokenRedefinicaoSenha { get; set; }
-    public DateTime? ExpiracaoTokenRedefinicaoSenha { get; set; }
-    public DateTime? SenhaAlteradaEm { get; set; }
-
-    // Account Lockout tracking
-    public int AcessosFalhos { get; set; }
-    public DateTime? BloqueioAte { get; set; }
+    public TipoVinculo TipoVinculo { get; set; } = TipoVinculo.Colaborador;
 
     // Navigation properties
+    public Usuario? Usuario { get; set; }
     public Editora? Editora { get; set; }
     public ICollection<Role> Roles { get; set; } = new List<Role>();
 }

@@ -4,6 +4,7 @@ using System.Text;
 using DomoLibri.Application.Services;
 using DomoLibri.Domain;
 using DomoLibri.Domain.Entities;
+using DomoLibri.Domain.Enums;
 using DomoLibri.Domain.Interfaces;
 using DomoLibri.Infrastructure.Data;
 using DomoLibri.Infrastructure.Services;
@@ -80,23 +81,30 @@ public class AuthServiceTests
         };
     }
 
-    private static UsuarioEditora CreateUser(
+    private static (Usuario usuario, VinculoUsuarioEditora vinculo) CreateUser(
         Guid editoraId,
         string senha = "Senha@123",
         bool emailConfirmado = true,
         bool ativo = true,
         string email = "admin@teste.com")
     {
-        return new UsuarioEditora
+        var usuario = new Usuario
         {
             Id = Guid.NewGuid(),
-            EditoraId = editoraId,
             Email = email,
             SenhaHash = BCrypt.Net.BCrypt.HashPassword(senha),
             Nome = "Admin Teste",
-            Ativo = ativo,
             EmailConfirmado = emailConfirmado
         };
+        var vinculo = new VinculoUsuarioEditora
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = editoraId,
+            UsuarioId = usuario.Id,
+            Ativo = ativo,
+            DataEntrada = DateTime.UtcNow
+        };
+        return (usuario, vinculo);
     }
 
     private static string HashToken(string token)
@@ -128,13 +136,13 @@ public class AuthServiceTests
 
         var result = await sut.RegisterAsync(dto);
 
-        var user = await db.UsuariosEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
-        Assert.NotNull(user);
+        var vinculo = await db.VinculosUsuarioEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
+        Assert.NotNull(vinculo);
 
         var consent = await db.ConsentimentosLGPD.IgnoreQueryFilters().FirstOrDefaultAsync();
         Assert.NotNull(consent);
         Assert.Equal(result.EditoraId, consent.EditoraId);
-        Assert.Equal(user.Id, consent.UsuarioId);
+        Assert.Equal(vinculo.Id, consent.UsuarioId);
         Assert.Equal("TermosDeUso", consent.TipoConsentimento);
         Assert.Equal("1.0", consent.VersaoTermo);
         Assert.True(consent.DataConsentimento <= DateTime.UtcNow);
@@ -157,14 +165,17 @@ public class AuthServiceTests
         Assert.Equal("editora-teste", editora.Slug);
         Assert.True(editora.Ativo);
 
-        var user = await db.UsuariosEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
-        Assert.NotNull(user);
-        Assert.Equal("admin@teste.com", user.Email);
-        Assert.True(user.Ativo);
-        Assert.False(user.EmailConfirmado);
-        Assert.NotNull(user.TokenConfirmacao);
-        Assert.NotNull(user.ExpiracaoToken);
-        Assert.True(user.ExpiracaoToken > DateTime.UtcNow);
+        var usuario = await db.Usuarios.IgnoreQueryFilters().FirstOrDefaultAsync();
+        Assert.NotNull(usuario);
+        Assert.Equal("admin@teste.com", usuario.Email);
+        Assert.False(usuario.EmailConfirmado);
+        Assert.NotNull(usuario.TokenConfirmacao);
+        Assert.NotNull(usuario.ExpiracaoToken);
+        Assert.True(usuario.ExpiracaoToken > DateTime.UtcNow);
+
+        var vinculo = await db.VinculosUsuarioEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
+        Assert.NotNull(vinculo);
+        Assert.True(vinculo.Ativo);
 
         emailMock.Verify(
             e => e.SendVerificationEmailAsync("admin@teste.com", "Admin", It.Is<string>(s => s.Contains("verify-email"))),
@@ -190,16 +201,17 @@ public class AuthServiceTests
     {
         var (db, emailMock, sut) = CreateSut();
         var editora = CreateEditora("Outra Editora");
-        var user = CreateUser(editora.Id, email: "admin@teste.com");
+        var (usuario, vinculo) = CreateUser(editora.Id, email: "admin@teste.com");
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var dto = new RegisterEditoraDto("Nova Editora", "admin@teste.com", "Senha@123", "Admin Novo", true);
 
         var result = await sut.RegisterAsync(dto);
 
-        Assert.Equal(editora.Id, result.EditoraId);
+        Assert.Equal(Guid.Empty, result.EditoraId);
         emailMock.Verify(
             e => e.SendEmailAsync("admin@teste.com", "Tentativa de cadastro", It.IsAny<string>()),
             Times.Once);
@@ -216,9 +228,9 @@ public class AuthServiceTests
         var dto = new RegisterEditoraDto("Editora A", "  Admin@TESTE.COM  ", "Senha@123", "Admin", true);
         await sut.RegisterAsync(dto);
 
-        var user = await db.UsuariosEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
-        Assert.NotNull(user);
-        Assert.Equal("admin@teste.com", user.Email);
+        var usuario = await db.Usuarios.IgnoreQueryFilters().FirstOrDefaultAsync();
+        Assert.NotNull(usuario);
+        Assert.Equal("admin@teste.com", usuario.Email);
     }
 
     #endregion
@@ -251,13 +263,13 @@ public class AuthServiceTests
 
         var result = await sut.RegisterAsync(dto);
 
-        var user = await db.UsuariosEditora
+        var vinculo = await db.VinculosUsuarioEditora
             .IgnoreQueryFilters()
-            .Include(u => u.Roles)
-            .FirstAsync(u => u.EditoraId == result.EditoraId);
+            .Include(v => v.Roles)
+            .FirstAsync(v => v.EditoraId == result.EditoraId);
 
-        Assert.Single(user.Roles);
-        Assert.Equal("AdminEditora", user.Roles.First().Nome);
+        Assert.Single(vinculo.Roles);
+        Assert.Equal("AdminEditora", vinculo.Roles.First().Nome);
     }
 
     [Fact]
@@ -353,9 +365,10 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, "Senha@123");
+        var (usuario, vinculo) = CreateUser(editora.Id, "Senha@123");
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var result = await sut.LoginAsync(new LoginDto("admin@teste.com", "Senha@123"));
@@ -367,7 +380,7 @@ public class AuthServiceTests
         var jwt = handler.ReadJwtToken(result.Token);
         Assert.Equal("admin@teste.com", jwt.Claims.First(c => c.Type == "email").Value);
         Assert.Equal(editora.Id.ToString(), jwt.Claims.First(c => c.Type == "tenant_id").Value);
-        Assert.Equal(user.Id.ToString(), jwt.Claims.First(c => c.Type == JwtRegisteredClaimNames.Sub).Value);
+        Assert.Equal(vinculo.Id.ToString(), jwt.Claims.First(c => c.Type == JwtRegisteredClaimNames.Sub).Value);
     }
 
     [Fact]
@@ -385,14 +398,15 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, ativo: false);
+        var (usuario, vinculo) = CreateUser(editora.Id, ativo: false);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(
-            () => sut.LoginAsync(new LoginDto(user.Email, "Senha@123")));
-        Assert.Equal("Usuário inativo.", ex.Message);
+            () => sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123")));
+        Assert.Equal("Usuário sem vínculo ativo com uma editora.", ex.Message);
     }
 
     [Fact]
@@ -400,13 +414,14 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, emailConfirmado: false);
+        var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(
-            () => sut.LoginAsync(new LoginDto(user.Email, "Senha@123")));
+            () => sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123")));
         Assert.Equal("E-mail não verificado.", ex.Message);
     }
 
@@ -415,14 +430,15 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id);
-        user.BloqueioAte = DateTime.UtcNow.AddMinutes(10);
+        var (usuario, vinculo) = CreateUser(editora.Id);
+        usuario.BloqueioAte = DateTime.UtcNow.AddMinutes(10);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(
-            () => sut.LoginAsync(new LoginDto(user.Email, "Senha@123")));
+            () => sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123")));
         Assert.Contains("bloqueada", ex.Message);
         Assert.Contains("minuto", ex.Message);
     }
@@ -432,15 +448,16 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id);
+        var (usuario, vinculo) = CreateUser(editora.Id);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(
-            () => sut.LoginAsync(new LoginDto(user.Email, "WrongPassword")));
+            () => sut.LoginAsync(new LoginDto(usuario.Email, "WrongPassword")));
 
-        var updated = await db.UsuariosEditora.IgnoreQueryFilters().FirstAsync();
+        var updated = await db.Usuarios.IgnoreQueryFilters().FirstAsync();
         Assert.Equal(1, updated.AcessosFalhos);
         Assert.Null(updated.BloqueioAte);
     }
@@ -450,16 +467,17 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id);
-        user.AcessosFalhos = 4;
+        var (usuario, vinculo) = CreateUser(editora.Id);
+        usuario.AcessosFalhos = 4;
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(
-            () => sut.LoginAsync(new LoginDto(user.Email, "WrongPassword")));
+            () => sut.LoginAsync(new LoginDto(usuario.Email, "WrongPassword")));
 
-        var updated = await db.UsuariosEditora.IgnoreQueryFilters().FirstAsync();
+        var updated = await db.Usuarios.IgnoreQueryFilters().FirstAsync();
         Assert.Equal(0, updated.AcessosFalhos);
         Assert.NotNull(updated.BloqueioAte);
         Assert.True(updated.BloqueioAte > DateTime.UtcNow.AddMinutes(14));
@@ -470,16 +488,17 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, "Senha@123");
-        user.AcessosFalhos = 3;
+        var (usuario, vinculo) = CreateUser(editora.Id, "Senha@123");
+        usuario.AcessosFalhos = 3;
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        var result = await sut.LoginAsync(new LoginDto(user.Email, "Senha@123"));
+        var result = await sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123"));
 
         Assert.NotNull(result.Token);
-        var updated = await db.UsuariosEditora.IgnoreQueryFilters().FirstAsync();
+        var updated = await db.Usuarios.IgnoreQueryFilters().FirstAsync();
         Assert.Equal(0, updated.AcessosFalhos);
         Assert.Null(updated.BloqueioAte);
     }
@@ -489,13 +508,14 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut(new Dictionary<string, string?> { { "Jwt:Secret", "tooshort" } });
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, "Senha@123");
+        var (usuario, vinculo) = CreateUser(editora.Id, "Senha@123");
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sut.LoginAsync(new LoginDto(user.Email, "Senha@123")));
+            () => sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123")));
         Assert.Contains("32", ex.Message);
     }
 
@@ -504,9 +524,10 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, "Senha@123", email: "admin@teste.com");
+        var (usuario, vinculo) = CreateUser(editora.Id, "Senha@123", email: "admin@teste.com");
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         // Login with differently-cased email with spaces
@@ -528,9 +549,11 @@ public class AuthServiceTests
         var registerResult = await sut.RegisterAsync(registerDto);
 
         // Confirm the email so login is allowed.
-        var user = await db.UsuariosEditora.IgnoreQueryFilters()
-            .FirstAsync(u => u.EditoraId == registerResult.EditoraId);
-        user.EmailConfirmado = true;
+        var vinculo = await db.VinculosUsuarioEditora.IgnoreQueryFilters()
+            .FirstAsync(v => v.EditoraId == registerResult.EditoraId);
+        var usuario = await db.Usuarios.IgnoreQueryFilters()
+            .FirstAsync(u => u.Id == vinculo.UsuarioId);
+        usuario.EmailConfirmado = true;
         await db.SaveChangesAsync();
 
         var loginResult = await sut.LoginAsync(new LoginDto("admin@jwt.com", "Senha@123"));
@@ -558,15 +581,18 @@ public class AuthServiceTests
         var registerResult = await sut.RegisterAsync(registerDto);
 
         // Give the admin user a second role (GestorEditorial) that shares permissions.
-        var adminUser = await db.UsuariosEditora.IgnoreQueryFilters()
-            .Include(u => u.Roles)
-            .FirstAsync(u => u.EditoraId == registerResult.EditoraId);
+        var adminVinculo = await db.VinculosUsuarioEditora.IgnoreQueryFilters()
+            .Include(v => v.Roles)
+            .FirstAsync(v => v.EditoraId == registerResult.EditoraId);
 
         var gestorRole = await db.Roles.IgnoreQueryFilters()
             .FirstAsync(r => r.EditoraId == registerResult.EditoraId && r.Nome == "GestorEditorial");
 
-        adminUser.Roles.Add(gestorRole);
-        adminUser.EmailConfirmado = true;
+        adminVinculo.Roles.Add(gestorRole);
+
+        var adminUsuario = await db.Usuarios.IgnoreQueryFilters()
+            .FirstAsync(u => u.Id == adminVinculo.UsuarioId);
+        adminUsuario.EmailConfirmado = true;
         await db.SaveChangesAsync();
 
         var loginResult = await sut.LoginAsync(new LoginDto("admin@dedup.com", "Senha@123"));
@@ -585,12 +611,13 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, "Senha@123");
+        var (usuario, vinculo) = CreateUser(editora.Id, "Senha@123");
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        var result = await sut.LoginAsync(new LoginDto(user.Email, "Senha@123"));
+        var result = await sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123"));
 
         var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Token);
         Assert.DoesNotContain(jwt.Claims, c => c.Type == "permission");
@@ -607,16 +634,17 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         const string plainToken = "my_test_token_12345";
-        var user = CreateUser(editora.Id, emailConfirmado: false);
-        user.TokenConfirmacao = HashToken(plainToken);
-        user.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+        var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
+        usuario.TokenConfirmacao = HashToken(plainToken);
+        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        await sut.VerifyEmailAsync(new VerifyEmailDto(user.Email, plainToken));
+        await sut.VerifyEmailAsync(new VerifyEmailDto(usuario.Email, plainToken));
 
-        var updated = await db.UsuariosEditora.IgnoreQueryFilters().FirstAsync();
+        var updated = await db.Usuarios.IgnoreQueryFilters().FirstAsync();
         Assert.True(updated.EmailConfirmado);
         Assert.Null(updated.TokenConfirmacao);
         Assert.Null(updated.ExpiracaoToken);
@@ -637,15 +665,16 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, emailConfirmado: false);
-        user.TokenConfirmacao = HashToken("correct_token");
-        user.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+        var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
+        usuario.TokenConfirmacao = HashToken("correct_token");
+        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sut.VerifyEmailAsync(new VerifyEmailDto(user.Email, "wrong_token")));
+            () => sut.VerifyEmailAsync(new VerifyEmailDto(usuario.Email, "wrong_token")));
         Assert.Contains("inválido", ex.Message);
     }
 
@@ -655,15 +684,16 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         const string plainToken = "expired_token_xyz";
-        var user = CreateUser(editora.Id, emailConfirmado: false);
-        user.TokenConfirmacao = HashToken(plainToken);
-        user.ExpiracaoToken = DateTime.UtcNow.AddHours(-1); // expired
+        var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
+        usuario.TokenConfirmacao = HashToken(plainToken);
+        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(-1); // expired
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sut.VerifyEmailAsync(new VerifyEmailDto(user.Email, plainToken)));
+            () => sut.VerifyEmailAsync(new VerifyEmailDto(usuario.Email, plainToken)));
         Assert.Contains("expirado", ex.Message);
     }
 
@@ -673,15 +703,16 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         const string plainToken = "valid_token_abc";
-        var user = CreateUser(editora.Id, emailConfirmado: true);
-        user.TokenConfirmacao = HashToken(plainToken);
-        user.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+        var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: true);
+        usuario.TokenConfirmacao = HashToken(plainToken);
+        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sut.VerifyEmailAsync(new VerifyEmailDto(user.Email, plainToken)));
+            () => sut.VerifyEmailAsync(new VerifyEmailDto(usuario.Email, plainToken)));
         Assert.Contains("confirmado", ex.Message);
     }
 
@@ -694,22 +725,23 @@ public class AuthServiceTests
     {
         var (db, emailMock, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, emailConfirmado: false);
-        user.TokenConfirmacao = HashToken("old_token");
-        user.ExpiracaoToken = DateTime.UtcNow.AddHours(1);
+        var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
+        usuario.TokenConfirmacao = HashToken("old_token");
+        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(1);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        var oldHash = user.TokenConfirmacao;
-        await sut.ResendVerificationEmailAsync(user.Email);
+        var oldHash = usuario.TokenConfirmacao;
+        await sut.ResendVerificationEmailAsync(usuario.Email);
 
-        var updated = await db.UsuariosEditora.IgnoreQueryFilters().FirstAsync();
+        var updated = await db.Usuarios.IgnoreQueryFilters().FirstAsync();
         Assert.NotEqual(oldHash, updated.TokenConfirmacao);
         Assert.True(updated.ExpiracaoToken > DateTime.UtcNow.AddHours(23));
 
         emailMock.Verify(
-            e => e.SendVerificationEmailAsync(user.Email, user.Nome, It.Is<string>(s => s.Contains("verify-email"))),
+            e => e.SendVerificationEmailAsync(usuario.Email, usuario.Nome, It.Is<string>(s => s.Contains("verify-email"))),
             Times.Once);
     }
 
@@ -731,12 +763,13 @@ public class AuthServiceTests
     {
         var (db, emailMock, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, emailConfirmado: true);
+        var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: true);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        await sut.ResendVerificationEmailAsync(user.Email);
+        await sut.ResendVerificationEmailAsync(usuario.Email);
 
         emailMock.Verify(
             e => e.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
@@ -752,20 +785,21 @@ public class AuthServiceTests
     {
         var (db, emailMock, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id);
+        var (usuario, vinculo) = CreateUser(editora.Id);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        await sut.ForgotPasswordAsync(new ForgotPasswordDto(user.Email));
+        await sut.ForgotPasswordAsync(new ForgotPasswordDto(usuario.Email));
 
-        var updated = await db.UsuariosEditora.IgnoreQueryFilters().FirstAsync();
+        var updated = await db.Usuarios.IgnoreQueryFilters().FirstAsync();
         Assert.NotNull(updated.TokenRedefinicaoSenha);
         Assert.NotNull(updated.ExpiracaoTokenRedefinicaoSenha);
         Assert.True(updated.ExpiracaoTokenRedefinicaoSenha > DateTime.UtcNow.AddMinutes(59));
 
         emailMock.Verify(
-            e => e.SendPasswordResetEmailAsync(user.Email, user.Nome, It.Is<string>(s => s.Contains("redefinir-senha"))),
+            e => e.SendPasswordResetEmailAsync(usuario.Email, usuario.Nome, It.Is<string>(s => s.Contains("redefinir-senha"))),
             Times.Once);
     }
 
@@ -782,20 +816,22 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task ForgotPasswordAsync_InactiveUser_ReturnsSilently()
+    public async Task ForgotPasswordAsync_InactiveBinding_SendsResetEmailAnyway()
     {
         var (db, emailMock, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, ativo: false);
+        var (usuario, vinculo) = CreateUser(editora.Id, ativo: false);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        await sut.ForgotPasswordAsync(new ForgotPasswordDto(user.Email));
+        await sut.ForgotPasswordAsync(new ForgotPasswordDto(usuario.Email));
 
+        // ForgotPasswordAsync only checks !EmailConfirmado — an inactive binding is irrelevant
         emailMock.Verify(
-            e => e.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
-            Times.Never);
+            e => e.SendPasswordResetEmailAsync(usuario.Email, usuario.Nome, It.IsAny<string>()),
+            Times.Once);
     }
 
     [Fact]
@@ -803,12 +839,13 @@ public class AuthServiceTests
     {
         var (db, emailMock, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, emailConfirmado: false);
+        var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        await sut.ForgotPasswordAsync(new ForgotPasswordDto(user.Email));
+        await sut.ForgotPasswordAsync(new ForgotPasswordDto(usuario.Email));
 
         emailMock.Verify(
             e => e.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
@@ -825,16 +862,17 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         const string resetToken = "valid_reset_token_xyz";
-        var user = CreateUser(editora.Id);
-        user.TokenRedefinicaoSenha = HashToken(resetToken);
-        user.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        var (usuario, vinculo) = CreateUser(editora.Id);
+        usuario.TokenRedefinicaoSenha = HashToken(resetToken);
+        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        await sut.ResetPasswordAsync(new ResetPasswordDto(user.Email, resetToken, "NovaSenha@456"));
+        await sut.ResetPasswordAsync(new ResetPasswordDto(usuario.Email, resetToken, "NovaSenha@456"));
 
-        var updated = await db.UsuariosEditora.IgnoreQueryFilters().FirstAsync();
+        var updated = await db.Usuarios.IgnoreQueryFilters().FirstAsync();
         Assert.Null(updated.TokenRedefinicaoSenha);
         Assert.Null(updated.ExpiracaoTokenRedefinicaoSenha);
         Assert.True(BCrypt.Net.BCrypt.Verify("NovaSenha@456", updated.SenhaHash));
@@ -855,15 +893,16 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id);
-        user.TokenRedefinicaoSenha = HashToken("correct_reset_token");
-        user.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        var (usuario, vinculo) = CreateUser(editora.Id);
+        usuario.TokenRedefinicaoSenha = HashToken("correct_reset_token");
+        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sut.ResetPasswordAsync(new ResetPasswordDto(user.Email, "wrong_token", "NovaSenha@456")));
+            () => sut.ResetPasswordAsync(new ResetPasswordDto(usuario.Email, "wrong_token", "NovaSenha@456")));
         Assert.Contains("inválido", ex.Message);
     }
 
@@ -873,15 +912,16 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         const string resetToken = "expired_reset_token";
-        var user = CreateUser(editora.Id);
-        user.TokenRedefinicaoSenha = HashToken(resetToken);
-        user.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(-1); // expired
+        var (usuario, vinculo) = CreateUser(editora.Id);
+        usuario.TokenRedefinicaoSenha = HashToken(resetToken);
+        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(-1); // expired
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sut.ResetPasswordAsync(new ResetPasswordDto(user.Email, resetToken, "NovaSenha@456")));
+            () => sut.ResetPasswordAsync(new ResetPasswordDto(usuario.Email, resetToken, "NovaSenha@456")));
         Assert.Contains("expirado", ex.Message);
     }
 
@@ -905,21 +945,22 @@ public class AuthServiceTests
         var ctxMock = BuildContextMock("10.0.0.1", "Chrome/120");
         var (db, _, sut) = CreateSut(userContextMock: ctxMock);
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, "Senha@123");
+        var (usuario, vinculo) = CreateUser(editora.Id, "Senha@123");
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        await sut.LoginAsync(new LoginDto(user.Email, "Senha@123"));
+        await sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123"));
 
         var log = await db.AuditLogs.IgnoreQueryFilters()
             .FirstOrDefaultAsync(l => l.Acao == "LoginSucesso");
 
         Assert.NotNull(log);
         Assert.Equal("Auth", log.Recurso);
-        Assert.Equal(user.Email, log.RecursoId);
-        Assert.Equal(user.EditoraId, log.EditoraId);
-        Assert.Equal(user.Id, log.UsuarioId);
+        Assert.Equal(usuario.Email, log.RecursoId);
+        Assert.Equal(vinculo.EditoraId, log.EditoraId);
+        Assert.Equal(vinculo.Id, log.UsuarioId);
         Assert.Equal("10.0.0.1", log.IP);
         Assert.Equal("Chrome/120", log.UserAgent);
     }
@@ -930,21 +971,22 @@ public class AuthServiceTests
         var ctxMock = BuildContextMock("10.0.0.2", "Firefox/120");
         var (db, _, sut) = CreateSut(userContextMock: ctxMock);
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id, "Senha@123");
+        var (usuario, vinculo) = CreateUser(editora.Id, "Senha@123");
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(
-            () => sut.LoginAsync(new LoginDto(user.Email, "WrongPassword")));
+            () => sut.LoginAsync(new LoginDto(usuario.Email, "WrongPassword")));
 
         var log = await db.AuditLogs.IgnoreQueryFilters()
             .FirstOrDefaultAsync(l => l.Acao == "LoginFalha");
 
         Assert.NotNull(log);
         Assert.Equal("Auth", log.Recurso);
-        Assert.Equal(user.Email, log.RecursoId);
-        Assert.Equal(user.EditoraId, log.EditoraId);
+        Assert.Equal(usuario.Email, log.RecursoId);
+        Assert.Equal(vinculo.EditoraId, log.EditoraId);
         Assert.Equal("10.0.0.2", log.IP);
     }
 
@@ -954,21 +996,22 @@ public class AuthServiceTests
         var ctxMock = BuildContextMock("10.0.0.3");
         var (db, _, sut) = CreateSut(userContextMock: ctxMock);
         var editora = CreateEditora();
-        var user = CreateUser(editora.Id);
-        user.BloqueioAte = DateTime.UtcNow.AddMinutes(10);
+        var (usuario, vinculo) = CreateUser(editora.Id);
+        usuario.BloqueioAte = DateTime.UtcNow.AddMinutes(10);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(
-            () => sut.LoginAsync(new LoginDto(user.Email, "Senha@123")));
+            () => sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123")));
 
         var log = await db.AuditLogs.IgnoreQueryFilters()
             .FirstOrDefaultAsync(l => l.Acao == "LoginFalha");
 
         Assert.NotNull(log);
-        Assert.Equal(user.EditoraId, log.EditoraId);
-        Assert.Equal(user.Id, log.UsuarioId);
+        Assert.Equal(vinculo.EditoraId, log.EditoraId);
+        Assert.Equal(vinculo.Id, log.UsuarioId);
     }
 
     [Fact]
@@ -1000,23 +1043,24 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut(userContextMock: ctxMock);
         var editora = CreateEditora();
         const string resetToken = "audit_reset_token_xyz";
-        var user = CreateUser(editora.Id);
-        user.TokenRedefinicaoSenha = HashToken(resetToken);
-        user.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        var (usuario, vinculo) = CreateUser(editora.Id);
+        usuario.TokenRedefinicaoSenha = HashToken(resetToken);
+        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(usuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        await sut.ResetPasswordAsync(new ResetPasswordDto(user.Email, resetToken, "NovaSenha@456"));
+        await sut.ResetPasswordAsync(new ResetPasswordDto(usuario.Email, resetToken, "NovaSenha@456"));
 
         var log = await db.AuditLogs.IgnoreQueryFilters()
             .FirstOrDefaultAsync(l => l.Acao == "RedefinicaoSenha");
 
         Assert.NotNull(log);
         Assert.Equal("Auth", log.Recurso);
-        Assert.Equal(user.Email, log.RecursoId);
-        Assert.Equal(user.EditoraId, log.EditoraId);
-        Assert.Equal(user.Id, log.UsuarioId);
+        Assert.Equal(usuario.Email, log.RecursoId);
+        Assert.Equal(vinculo.EditoraId, log.EditoraId);
+        Assert.Equal(vinculo.Id, log.UsuarioId);
         Assert.Equal("10.0.0.5", log.IP);
         Assert.Equal("Mobile/Safari", log.UserAgent);
     }

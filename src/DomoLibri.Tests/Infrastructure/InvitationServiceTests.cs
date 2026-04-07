@@ -56,8 +56,8 @@ public class InvitationServiceTests
         return new SutContext(db, emailMock, sut, tenantId, inviterId);
     }
 
-    /// <summary>Seeds an Editora + UsuarioEditora into the DB and returns their IDs.</summary>
-    private static async Task<(Editora editora, UsuarioEditora inviter, Role role)> SeedTenantAsync(
+    /// <summary>Seeds an Editora + VinculoUsuarioEditora into the DB and returns their IDs.</summary>
+    private static async Task<(Editora editora, VinculoUsuarioEditora inviter, Role role)> SeedTenantAsync(
         DomoLibriDbContext db, Guid tenantId, Guid inviterId)
     {
         var editora = new Editora
@@ -69,15 +69,22 @@ public class InvitationServiceTests
             Ativo = true
         };
 
-        var inviter = new UsuarioEditora
+        var inviterUsuario = new Usuario
         {
-            Id = inviterId,
-            EditoraId = tenantId,
+            Id = Guid.NewGuid(),
             Email = "admin@editora.com",
             SenhaHash = "hash",
             Nome = "Admin Editora",
-            Ativo = true,
             EmailConfirmado = true
+        };
+
+        var inviter = new VinculoUsuarioEditora
+        {
+            Id = inviterId,
+            EditoraId = tenantId,
+            UsuarioId = inviterUsuario.Id,
+            Ativo = true,
+            DataEntrada = DateTime.UtcNow
         };
 
         var role = new Role
@@ -88,7 +95,8 @@ public class InvitationServiceTests
         };
 
         db.Editoras.Add(editora);
-        db.UsuariosEditora.Add(inviter);
+        db.Usuarios.Add(inviterUsuario);
+        db.VinculosUsuarioEditora.Add(inviter);
         db.Roles.Add(role);
         await db.SaveChangesAsync();
 
@@ -155,11 +163,11 @@ public class InvitationServiceTests
     public async Task InviteUser_EmailAlreadyUser_ThrowsInvalidOperation()
     {
         var ctx = CreateSut();
-        var (_, inviter, role) = await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
+        var (_, _, role) = await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
 
         // Try to invite the inviter's own e-mail (already a user)
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            ctx.Sut.InviteUserAsync(new InviteUserDto(inviter.Email, role.Id)));
+            ctx.Sut.InviteUserAsync(new InviteUserDto("admin@editora.com", role.Id)));
 
         Assert.Contains("já pertence", ex.Message);
     }
@@ -267,11 +275,15 @@ public class InvitationServiceTests
         var roleB = new Role { Id = Guid.NewGuid(), EditoraId = tenantB, Nome = "Editor" };
 
         dbA.Editoras.Add(new Editora { Id = tenantA, Nome = "Editora A", Slug = "editora-a", DataCriacao = DateTime.UtcNow, Ativo = true });
-        dbA.UsuariosEditora.Add(new UsuarioEditora { Id = inviterA, EditoraId = tenantA, Email = "admin@a.com", SenhaHash = "h", Nome = "Admin A", Ativo = true, EmailConfirmado = true });
+        var inviterAUsuario = new Usuario { Id = Guid.NewGuid(), Email = "admin@a.com", SenhaHash = "h", Nome = "Admin A", EmailConfirmado = true };
+        dbA.Usuarios.Add(inviterAUsuario);
+        dbA.VinculosUsuarioEditora.Add(new VinculoUsuarioEditora { Id = inviterA, EditoraId = tenantA, UsuarioId = inviterAUsuario.Id, Ativo = true, DataEntrada = DateTime.UtcNow });
         dbA.Roles.Add(roleA);
 
         dbB.Editoras.Add(new Editora { Id = tenantB, Nome = "Editora B", Slug = "editora-b", DataCriacao = DateTime.UtcNow, Ativo = true });
-        dbB.UsuariosEditora.Add(new UsuarioEditora { Id = inviterB, EditoraId = tenantB, Email = "admin@b.com", SenhaHash = "h", Nome = "Admin B", Ativo = true, EmailConfirmado = true });
+        var inviterBUsuario = new Usuario { Id = Guid.NewGuid(), Email = "admin@b.com", SenhaHash = "h", Nome = "Admin B", EmailConfirmado = true };
+        dbB.Usuarios.Add(inviterBUsuario);
+        dbB.VinculosUsuarioEditora.Add(new VinculoUsuarioEditora { Id = inviterB, EditoraId = tenantB, UsuarioId = inviterBUsuario.Id, Ativo = true, DataEntrada = DateTime.UtcNow });
         dbB.Roles.Add(roleB);
 
         await dbA.SaveChangesAsync();

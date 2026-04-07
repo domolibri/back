@@ -66,35 +66,35 @@ public class AuditInterceptorTests
     }
 
     [Fact]
-    public async Task Insert_UsuarioEditora_CreatesInsertAuditLog()
+    public async Task Insert_VinculoUsuarioEditora_CreatesInsertAuditLog()
     {
         var (db, _, _) = CreateContext();
 
         db.Editoras.Add(new Editora { Id = _tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true });
         await db.SaveChangesAsync();
 
-        // Clear existing audit logs to isolate the UsuarioEditora insert
+        // Clear existing audit logs to isolate the VinculoUsuarioEditora insert
         db.AuditLogs.RemoveRange(db.AuditLogs.IgnoreQueryFilters());
         await db.SaveChangesAsync();
 
-        var userId = Guid.NewGuid();
-        var user = new UsuarioEditora
+        var vinculoId = Guid.NewGuid();
+        var adminUsuario = new Usuario { Id = Guid.NewGuid(), Email = "admin@test.com", SenhaHash = "hash", Nome = "Admin", EmailConfirmado = true };
+        var vinculo = new VinculoUsuarioEditora
         {
-            Id = userId,
+            Id = vinculoId,
             EditoraId = _tenantId,
-            Email = "admin@test.com",
-            SenhaHash = "hash_secreto",
-            Nome = "Admin",
+            UsuarioId = adminUsuario.Id,
             Ativo = true
         };
-        db.UsuariosEditora.Add(user);
+        db.Usuarios.Add(adminUsuario);
+        db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
         var log = await db.AuditLogs.IgnoreQueryFilters().FirstOrDefaultAsync();
         Assert.NotNull(log);
         Assert.Equal("Insert", log.Acao);
-        Assert.Equal("UsuarioEditora", log.Recurso);
-        Assert.Equal(userId.ToString(), log.RecursoId);
+        Assert.Equal("VinculoUsuarioEditora", log.Recurso);
+        Assert.Equal(vinculoId.ToString(), log.RecursoId);
     }
 
     // ─── Update ───────────────────────────────────────────────────────────────
@@ -147,67 +147,47 @@ public class AuditInterceptorTests
     // ─── Sensitive field exclusion ────────────────────────────────────────────
 
     [Fact]
-    public async Task Insert_UsuarioEditora_NeverIncludesSenhaHashInLogs()
+    public async Task Insert_Usuario_IsNotAudited_ProtectingCredentials()
     {
+        // SenhaHash lives on Usuario, which is NOT in the audited entities list.
+        // Inserting a Usuario must create no audit log.
         var (db, _, _) = CreateContext();
 
-        db.Editoras.Add(new Editora { Id = _tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true });
-        await db.SaveChangesAsync();
-        db.AuditLogs.RemoveRange(db.AuditLogs.IgnoreQueryFilters());
-        await db.SaveChangesAsync();
-
-        db.UsuariosEditora.Add(new UsuarioEditora
+        db.Usuarios.Add(new Usuario
         {
             Id = Guid.NewGuid(),
-            EditoraId = _tenantId,
             Email = "user@test.com",
             SenhaHash = "super_secreto_hash",
             Nome = "Usuário",
-            Ativo = true
+            EmailConfirmado = false
         });
         await db.SaveChangesAsync();
 
-        var log = await db.AuditLogs.IgnoreQueryFilters().FirstOrDefaultAsync();
-        Assert.NotNull(log?.DadosNovos);
-
-        var json = JsonDocument.Parse(log.DadosNovos!).RootElement;
-        Assert.False(json.TryGetProperty("SenhaHash", out _), "SenhaHash deve ser excluído do log");
-        Assert.DoesNotContain("super_secreto_hash", log.DadosNovos);
+        var count = await db.AuditLogs.IgnoreQueryFilters().CountAsync();
+        Assert.Equal(0, count);
     }
 
     [Fact]
-    public async Task Insert_UsuarioEditora_NeverIncludesSecurityTokensInLogs()
+    public async Task Insert_Usuario_WithTokens_IsNotAudited_ProtectingSecurityTokens()
     {
+        // Security tokens (TokenConfirmacao, TokenRedefinicaoSenha) are on Usuario,
+        // which is NOT in the audited entities list. Inserting a Usuario must create no audit log.
         var (db, _, _) = CreateContext();
 
-        db.Editoras.Add(new Editora { Id = _tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true });
-        await db.SaveChangesAsync();
-        db.AuditLogs.RemoveRange(db.AuditLogs.IgnoreQueryFilters());
-        await db.SaveChangesAsync();
-
-        db.UsuariosEditora.Add(new UsuarioEditora
+        db.Usuarios.Add(new Usuario
         {
             Id = Guid.NewGuid(),
-            EditoraId = _tenantId,
             Email = "user@test.com",
             SenhaHash = "h",
             Nome = "U",
-            Ativo = true,
+            EmailConfirmado = false,
             TokenConfirmacao = "token_confirmacao_secreto",
             TokenRedefinicaoSenha = "token_reset_secreto"
         });
         await db.SaveChangesAsync();
 
-        var log = await db.AuditLogs.IgnoreQueryFilters().FirstOrDefaultAsync();
-        Assert.NotNull(log?.DadosNovos);
-
-        // Use exact JSON key checks (substring checks would false-positive on
-        // ExpiracaoTokenRedefinicaoSenha which contains "TokenRedefinicaoSenha")
-        var json = JsonDocument.Parse(log.DadosNovos!).RootElement;
-        Assert.False(json.TryGetProperty("TokenConfirmacao", out _), "TokenConfirmacao deve ser excluído do log");
-        Assert.False(json.TryGetProperty("TokenRedefinicaoSenha", out _), "TokenRedefinicaoSenha deve ser excluído do log");
-        Assert.DoesNotContain("token_confirmacao_secreto", log.DadosNovos);
-        Assert.DoesNotContain("token_reset_secreto", log.DadosNovos);
+        var count = await db.AuditLogs.IgnoreQueryFilters().CountAsync();
+        Assert.Equal(0, count);
     }
 
     // ─── Non-audited entities ─────────────────────────────────────────────────
@@ -283,7 +263,7 @@ public class AuditInterceptorTests
     // ─── EditoraId resolution ─────────────────────────────────────────────────
 
     [Fact]
-    public async Task Insert_UsuarioEditora_UsesEntityEditoraIdNotContextTenantId()
+    public async Task Insert_VinculoUsuarioEditora_UsesEntityEditoraIdNotContextTenantId()
     {
         var entityEditoraId = Guid.NewGuid();
 
@@ -295,13 +275,13 @@ public class AuditInterceptorTests
         db.AuditLogs.RemoveRange(db.AuditLogs.IgnoreQueryFilters());
         await db.SaveChangesAsync();
 
-        db.UsuariosEditora.Add(new UsuarioEditora
+        var usu = new Usuario { Id = Guid.NewGuid(), Email = "u@e.com", SenhaHash = "h", Nome = "U", EmailConfirmado = false };
+        db.Usuarios.Add(usu);
+        db.VinculosUsuarioEditora.Add(new VinculoUsuarioEditora
         {
             Id = Guid.NewGuid(),
             EditoraId = entityEditoraId,
-            Email = "u@e.com",
-            SenhaHash = "h",
-            Nome = "U",
+            UsuarioId = usu.Id,
             Ativo = true
         });
         await db.SaveChangesAsync();

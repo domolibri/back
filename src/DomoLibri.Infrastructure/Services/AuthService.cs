@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using DomoLibri.Application.Services;
 using DomoLibri.Domain;
 using DomoLibri.Domain.Entities;
+using DomoLibri.Domain.Enums;
 using DomoLibri.Domain.Interfaces;
 using DomoLibri.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -50,20 +51,19 @@ public partial class AuthService : IAuthService
         if (slugExiste)
             throw new InvalidOperationException($"Já existe uma editora com o nome '{dto.NomeEditora}'.");
 
-        // 2. Check if Email is already registered globally (since we don't have tenant context yet)
-        var existingUser = await _context.UsuariosEditora
-            .IgnoreQueryFilters()
+        // 2. Check if Email is already registered globally
+        var existingUser = await _context.Usuarios
             .FirstOrDefaultAsync(u => u.Email == email);
 
         if (existingUser != null)
         {
             // Security: To avoid email enumeration, we return success even if email exists.
             // But we send an email to the user informing them of the attempt.
-            await _emailService.SendEmailAsync(email, "Tentativa de cadastro", 
+            await _emailService.SendEmailAsync(email, "Tentativa de cadastro",
                 $"Olá {existingUser.Nome}, alguém tentou cadastrar uma nova editora com seu e-mail. Se foi você, lembre-se que já possui uma conta.");
-            
-            // Return a dummy ID or the existing one (careful with info leakage)
-            return new RegisterEditoraResult(existingUser.EditoraId);
+
+            // Return a dummy EditoraId to avoid info leakage
+            return new RegisterEditoraResult(Guid.Empty);
         }
 
         var editora = new Editora
@@ -81,17 +81,27 @@ public partial class AuthService : IAuthService
 
         var adminRole = await SeedDefaultRolesAsync(editora.Id);
 
-        var adminUser = new UsuarioEditora
+        // 3. Create the global user identity
+        var usuario = new Usuario
         {
             Id = Guid.NewGuid(),
-            EditoraId = editora.Id,
             Email = email,
             SenhaHash = senhaHash,
             Nome = dto.NomeAdmin,
-            Ativo = true,
             EmailConfirmado = false,
             TokenConfirmacao = hashedConfirmationToken,
-            ExpiracaoToken = DateTime.UtcNow.AddHours(24),
+            ExpiracaoToken = DateTime.UtcNow.AddHours(24)
+        };
+
+        // 4. Create the per-tenant binding
+        var vinculo = new VinculoUsuarioEditora
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = editora.Id,
+            UsuarioId = usuario.Id,
+            Ativo = true,
+            DataEntrada = DateTime.UtcNow,
+            TipoVinculo = TipoVinculo.Administrador,
             Roles = [adminRole]
         };
 
@@ -99,83 +109,87 @@ public partial class AuthService : IAuthService
         {
             Id = Guid.NewGuid(),
             EditoraId = editora.Id,
-            UsuarioId = adminUser.Id,
+            UsuarioId = vinculo.Id,
             TipoConsentimento = "TermosDeUso",
             VersaoTermo = VersaoTermosDeUso,
             DataConsentimento = DateTime.UtcNow
         };
 
         _context.Editoras.Add(editora);
-        _context.UsuariosEditora.Add(adminUser);
+        _context.Usuarios.Add(usuario);
+        _context.VinculosUsuarioEditora.Add(vinculo);
         _context.ConsentimentosLGPD.Add(consentimento);
         await _context.SaveChangesAsync();
 
         var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
         var verificationLink = $"{frontendUrl}/onboarding/verify-email" +
-                               $"?email={Uri.EscapeDataString(adminUser.Email)}&token={confirmationToken}";
+                               $"?email={Uri.EscapeDataString(usuario.Email)}&token={confirmationToken}";
 
-        await _emailService.SendVerificationEmailAsync(adminUser.Email, adminUser.Nome, verificationLink);
+        await _emailService.SendVerificationEmailAsync(usuario.Email, usuario.Nome, verificationLink);
 
         return new RegisterEditoraResult(editora.Id);
     }
 
     public async Task<LoginResult> LoginAsync(LoginDto dto)
     {
-        UsuarioEditora? user = null;
+        Usuario? usuario = null;
+        VinculoUsuarioEditora? vinculo = null;
         try
         {
-            user = await _context.UsuariosEditora
-                .IgnoreQueryFilters()
-                .Include(u => u.Roles)
+            usuario = await _context.Usuarios
                 .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
 
-            if (user is null)
+            if (usuario is null)
                 throw new UnauthorizedAccessException("Credenciais inválidas.");
 
-            if (!user.Ativo)
-                throw new UnauthorizedAccessException("Usuário inativo.");
-
-            if (!user.EmailConfirmado)
+            if (!usuario.EmailConfirmado)
                 throw new UnauthorizedAccessException("E-mail não verificado.");
 
-            // 1. Check if the account is currently locked
-            if (user.BloqueioAte.HasValue && user.BloqueioAte.Value > DateTime.UtcNow)
+            // 1. Load the active tenant binding early so it's available for audit logging on any failure
+            vinculo = await _context.VinculosUsuarioEditora
+                .IgnoreQueryFilters()
+                .Include(v => v.Roles)
+                .FirstOrDefaultAsync(v => v.UsuarioId == usuario.Id && v.Ativo);
+
+            // 2. Check if the account is currently locked
+            if (usuario.BloqueioAte.HasValue && usuario.BloqueioAte.Value > DateTime.UtcNow)
             {
-                var remainingTime = Math.Ceiling((user.BloqueioAte.Value - DateTime.UtcNow).TotalMinutes);
+                var remainingTime = Math.Ceiling((usuario.BloqueioAte.Value - DateTime.UtcNow).TotalMinutes);
                 throw new UnauthorizedAccessException($"Esta conta está temporariamente bloqueada por múltiplas tentativas falhas. Tente novamente em {remainingTime} minuto(s).");
             }
 
-            // 2. Verify password
-            if (!BCrypt.Net.BCrypt.Verify(dto.Senha, user.SenhaHash))
+            // 3. Verify password
+            if (!BCrypt.Net.BCrypt.Verify(dto.Senha, usuario.SenhaHash))
             {
-                // Increment failed attempts
-                user.AcessosFalhos++;
+                usuario.AcessosFalhos++;
 
-                if (user.AcessosFalhos >= 5)
+                if (usuario.AcessosFalhos >= 5)
                 {
-                    user.BloqueioAte = DateTime.UtcNow.AddMinutes(15);
-                    user.AcessosFalhos = 0; // Reset after locking
+                    usuario.BloqueioAte = DateTime.UtcNow.AddMinutes(15);
+                    usuario.AcessosFalhos = 0;
                 }
 
                 await _context.SaveChangesAsync();
                 throw new UnauthorizedAccessException("Credenciais inválidas.");
             }
 
-            // 3. Reset lockout state on successful login (only persist if there is something to clear)
-            if (user.AcessosFalhos > 0 || user.BloqueioAte.HasValue)
+            // 4. Check binding exists
+            if (vinculo is null)
+                throw new UnauthorizedAccessException("Usuário sem vínculo ativo com uma editora.");
+
+            // 5. Reset lockout state on successful login
+            if (usuario.AcessosFalhos > 0 || usuario.BloqueioAte.HasValue)
             {
-                user.AcessosFalhos = 0;
-                user.BloqueioAte = null;
+                usuario.AcessosFalhos = 0;
+                usuario.BloqueioAte = null;
                 await _context.SaveChangesAsync();
             }
 
-            // 4. Load unique permission codes from all the user's roles.
-            //    Done as a separate query so IgnoreQueryFilters is applied unambiguously —
-            //    ThenInclude on N:N skip navigations can silently re-apply global filters.
+            // 5. Load unique permission codes from all the user's roles
             IReadOnlyList<string> permCodes = [];
-            if (user.Roles.Count > 0)
+            if (vinculo.Roles.Count > 0)
             {
-                var roleIds = user.Roles.Select(r => r.Id).ToList();
+                var roleIds = vinculo.Roles.Select(r => r.Id).ToList();
                 permCodes = await _context.Roles
                     .IgnoreQueryFilters()
                     .Where(r => roleIds.Contains(r.Id))
@@ -185,35 +199,34 @@ public partial class AuthService : IAuthService
                     .ToListAsync();
             }
 
-            var token = GenerateJwt(user, permCodes);
-            await AddAuthAuditLogAsync("LoginSucesso", user);
+            var token = GenerateJwt(usuario, vinculo, permCodes);
+            await AddAuthAuditLogAsync("LoginSucesso", usuario, vinculo);
             return new LoginResult(token);
         }
         catch (UnauthorizedAccessException)
         {
-            await AddAuthAuditLogAsync("LoginFalha", user, dto.Email);
+            await AddAuthAuditLogAsync("LoginFalha", usuario, vinculo, dto.Email);
             throw;
         }
     }
 
     public async Task VerifyEmailAsync(VerifyEmailDto dto)
     {
-        var user = await _context.UsuariosEditora
-            .IgnoreQueryFilters()
+        var usuario = await _context.Usuarios
             .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
 
-        if (user is null || user.TokenConfirmacao != HashToken(dto.Token))
+        if (usuario is null || usuario.TokenConfirmacao != HashToken(dto.Token))
             throw new InvalidOperationException("Token de verificação inválido.");
 
-        if (user.ExpiracaoToken < DateTime.UtcNow)
+        if (usuario.ExpiracaoToken < DateTime.UtcNow)
             throw new InvalidOperationException("Token de verificação expirado.");
 
-        if (user.EmailConfirmado)
+        if (usuario.EmailConfirmado)
             throw new InvalidOperationException("E-mail já confirmado.");
 
-        user.EmailConfirmado = true;
-        user.TokenConfirmacao = null;
-        user.ExpiracaoToken = null;
+        usuario.EmailConfirmado = true;
+        usuario.TokenConfirmacao = null;
+        usuario.ExpiracaoToken = null;
 
         await _context.SaveChangesAsync();
     }
@@ -222,99 +235,100 @@ public partial class AuthService : IAuthService
     {
         var normalizedEmail = email.Trim().ToLower();
 
-        var user = await _context.UsuariosEditora
-            .IgnoreQueryFilters()
+        var usuario = await _context.Usuarios
             .FirstOrDefaultAsync(u => u.Email == normalizedEmail);
 
-        // Return silently if user not found to avoid email enumeration
-        if (user is null || user.EmailConfirmado)
+        if (usuario is null || usuario.EmailConfirmado)
             return;
 
         var newToken = GenerateSecureToken();
-        user.TokenConfirmacao = HashToken(newToken);
-        user.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+        usuario.TokenConfirmacao = HashToken(newToken);
+        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
 
         await _context.SaveChangesAsync();
 
         var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
         var verificationLink = $"{frontendUrl}/onboarding/verify-email" +
-                               $"?email={Uri.EscapeDataString(user.Email)}&token={newToken}";
+                               $"?email={Uri.EscapeDataString(usuario.Email)}&token={newToken}";
 
-        await _emailService.SendVerificationEmailAsync(user.Email, user.Nome, verificationLink);
+        await _emailService.SendVerificationEmailAsync(usuario.Email, usuario.Nome, verificationLink);
     }
 
     public async Task ForgotPasswordAsync(ForgotPasswordDto dto)
     {
         var email = dto.Email.Trim().ToLower();
 
-        var user = await _context.UsuariosEditora
-            .IgnoreQueryFilters()
+        var usuario = await _context.Usuarios
             .FirstOrDefaultAsync(u => u.Email == email);
 
-        // Return silently to avoid e-mail enumeration
-        if (user is null || !user.Ativo || !user.EmailConfirmado)
+        if (usuario is null || !usuario.EmailConfirmado)
             return;
 
         var resetToken = GenerateSecureToken();
-        user.TokenRedefinicaoSenha = HashToken(resetToken);
-        user.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        usuario.TokenRedefinicaoSenha = HashToken(resetToken);
+        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
 
         await _context.SaveChangesAsync();
 
         var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
         var resetLink = $"{frontendUrl}/redefinir-senha" +
-                        $"?email={Uri.EscapeDataString(user.Email)}&token={resetToken}";
+                        $"?email={Uri.EscapeDataString(usuario.Email)}&token={resetToken}";
 
-        await _emailService.SendPasswordResetEmailAsync(user.Email, user.Nome, resetLink);
+        await _emailService.SendPasswordResetEmailAsync(usuario.Email, usuario.Nome, resetLink);
     }
 
     public async Task ResetPasswordAsync(ResetPasswordDto dto)
     {
         var email = dto.Email.Trim().ToLower();
 
-        var user = await _context.UsuariosEditora
-            .IgnoreQueryFilters()
+        var usuario = await _context.Usuarios
             .FirstOrDefaultAsync(u => u.Email == email);
 
-        if (user is null)
+        if (usuario is null)
             throw new InvalidOperationException("Link de redefinição inválido.");
 
-        // Explicit check: link was already consumed (token cleared after successful use)
-        if (user.TokenRedefinicaoSenha is null && user.SenhaAlteradaEm.HasValue)
+        if (usuario.TokenRedefinicaoSenha is null && usuario.SenhaAlteradaEm.HasValue)
             throw new InvalidOperationException("Este link já foi utilizado. Solicite um novo link se necessário.");
 
-        if (user.TokenRedefinicaoSenha != HashToken(dto.Token))
+        if (usuario.TokenRedefinicaoSenha != HashToken(dto.Token))
             throw new InvalidOperationException("Link de redefinição inválido.");
 
-        if (user.ExpiracaoTokenRedefinicaoSenha < DateTime.UtcNow)
+        if (usuario.ExpiracaoTokenRedefinicaoSenha < DateTime.UtcNow)
             throw new InvalidOperationException("Link de redefinição expirado. Solicite um novo.");
 
-        user.SenhaHash = BCrypt.Net.BCrypt.HashPassword(dto.NovaSenha);
-        user.SenhaAlteradaEm = DateTime.UtcNow;
-        user.TokenRedefinicaoSenha = null;
-        user.ExpiracaoTokenRedefinicaoSenha = null;
+        usuario.SenhaHash = BCrypt.Net.BCrypt.HashPassword(dto.NovaSenha);
+        usuario.SenhaAlteradaEm = DateTime.UtcNow;
+        usuario.TokenRedefinicaoSenha = null;
+        usuario.ExpiracaoTokenRedefinicaoSenha = null;
 
         await _context.SaveChangesAsync();
-        await AddAuthAuditLogAsync("RedefinicaoSenha", user);
+
+        var vinculo = await _context.VinculosUsuarioEditora
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(v => v.UsuarioId == usuario.Id && v.Ativo);
+
+        await AddAuthAuditLogAsync("RedefinicaoSenha", usuario, vinculo);
     }
 
     /// <summary>
-    /// Persists an authentication audit entry.
-    /// <paramref name="emailTentativa"/> is used when <paramref name="user"/> is null (e.g., user-not-found case).
-    /// Best-effort: failures are swallowed so that auth operations are never blocked by logging issues.
+    /// Persists an authentication audit entry. Best-effort: failures never block auth operations.
     /// </summary>
-    private async Task AddAuthAuditLogAsync(string acao, UsuarioEditora? user, string? emailTentativa = null)
+    private async Task AddAuthAuditLogAsync(
+        string acao,
+        Usuario? usuario,
+        VinculoUsuarioEditora? vinculo = null,
+        string? emailTentativa = null)
     {
         try
         {
             var entry = new AuditLog
             {
                 Id = Guid.NewGuid(),
-                EditoraId = user?.EditoraId,
-                UsuarioId = user?.Id,
+                EditoraId = vinculo?.EditoraId,
+                UsuarioId = vinculo?.Id ?? usuario?.Id,
                 Acao = acao,
                 Recurso = "Auth",
-                RecursoId = user?.Email ?? emailTentativa ?? "",
+                RecursoId = usuario?.Email ?? emailTentativa ?? "",
                 IP = _userContextProvider.GetIp() ?? "",
                 UserAgent = _userContextProvider.GetUserAgent() ?? "",
                 DataHora = DateTime.UtcNow
@@ -326,7 +340,6 @@ public partial class AuthService : IAuthService
         catch
         {
             // Best-effort: auth audit logging must not block auth operations.
-            // TODO: forward to ILogger once injected for production observability.
         }
     }
 
@@ -336,7 +349,6 @@ public partial class AuthService : IAuthService
     /// </summary>
     private async Task<Role> SeedDefaultRolesAsync(Guid editoraId)
     {
-        // 1. Upsert global permissions — create any that are not yet in the DB.
         var allCodes = SystemPermissions.All.Select(d => d.Codigo).ToList();
 
         var existing = await _context.Permissions
@@ -360,11 +372,9 @@ public partial class AuthService : IAuthService
             permissionMap[def.Codigo] = perm;
         }
 
-        // 2. Helper: resolve a set of codes to tracked Permission entities.
         List<Permission> Resolve(string[] codes) =>
             codes.Select(c => permissionMap[c]).ToList();
 
-        // 3. Create the three default roles for this tenant.
         var adminRole = new Role
         {
             Id = Guid.NewGuid(),
@@ -399,7 +409,7 @@ public partial class AuthService : IAuthService
         return adminRole;
     }
 
-    private string GenerateJwt(UsuarioEditora user, IReadOnlyList<string> permCodes)
+    private string GenerateJwt(Usuario usuario, VinculoUsuarioEditora vinculo, IReadOnlyList<string> permCodes)
     {
         var jwtSection = _configuration.GetSection("Jwt");
         var secret = jwtSection["Secret"] ?? string.Empty;
@@ -416,18 +426,15 @@ public partial class AuthService : IAuthService
 
         var claims = new List<Claim>
         {
-            new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
-            new Claim(JwtRegisteredClaimNames.Email, user.Email),
-            new Claim(JwtRegisteredClaimNames.Name, user.Nome),
-            new Claim("tenant_id", user.EditoraId.ToString())
+            new Claim(JwtRegisteredClaimNames.Sub, vinculo.Id.ToString()),
+            new Claim(JwtRegisteredClaimNames.Email, usuario.Email),
+            new Claim(JwtRegisteredClaimNames.Name, usuario.Nome),
+            new Claim("tenant_id", vinculo.EditoraId.ToString())
         };
 
-        // "role" short form: JwtBearerHandler maps it to ClaimTypes.Role via InboundClaimTypeMap,
-        // making [Authorize(Roles = "...")] work without any extra configuration.
-        foreach (var role in user.Roles)
+        foreach (var role in vinculo.Roles)
             claims.Add(new Claim("role", role.Nome));
 
-        // One "permission" claim per unique code — codes are short and deduplicated upstream.
         foreach (var code in permCodes)
             claims.Add(new Claim("permission", code));
 

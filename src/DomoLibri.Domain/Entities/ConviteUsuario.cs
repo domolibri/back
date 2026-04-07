@@ -33,5 +33,5 @@ public class ConviteUsuario
     // Navigation properties
     public Editora? Editora { get; set; }
     public Role? Role { get; set; }
-    public UsuarioEditora? ConvidadoPor { get; set; }
+    public VinculoUsuarioEditora? ConvidadoPor { get; set; }
 }

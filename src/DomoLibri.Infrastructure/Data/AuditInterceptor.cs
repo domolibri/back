@@ -67,14 +67,14 @@ public class AuditInterceptor : SaveChangesInterceptor
             if (entry.State is not (EntityState.Added or EntityState.Modified or EntityState.Deleted))
                 continue;
 
-            if (entry.Entity is not (Editora or UsuarioEditora))
+            if (entry.Entity is not (Editora or VinculoUsuarioEditora))
                 continue;
 
             // Resolve the EditoraId directly from the entity when possible.
             // For Editora, the entity itself is the tenant root, so use its Id.
             var editoraId = entry.Entity switch
             {
-                UsuarioEditora u => (Guid?)u.EditoraId,
+                VinculoUsuarioEditora v => (Guid?)v.EditoraId,
                 Editora e => (Guid?)e.Id,
                 _ => editoraIdFromContext
             };
