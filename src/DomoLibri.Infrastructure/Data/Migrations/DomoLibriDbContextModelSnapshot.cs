@@ -71,7 +71,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
 
                     b.HasIndex("EditoraId", "DataHora");
 
-                    b.ToTable("AuditLogs");
+                    b.ToTable("AuditLogs", (string)null);
                 });
 
             modelBuilder.Entity("DomoLibri.Domain.Entities.ConsentimentoLGPD", b =>
@@ -103,7 +103,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
 
                     b.HasIndex("UsuarioId");
 
-                    b.ToTable("ConsentimentosLGPD");
+                    b.ToTable("ConsentimentosLGPD", (string)null);
                 });
 
             modelBuilder.Entity("DomoLibri.Domain.Entities.ConviteUsuario", b =>
@@ -149,7 +149,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
 
                     b.HasIndex("EditoraId", "Email");
 
-                    b.ToTable("Convites");
+                    b.ToTable("Convites", (string)null);
                 });
 
             modelBuilder.Entity("DomoLibri.Domain.Entities.Editora", b =>
@@ -183,7 +183,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                     b.HasIndex("Slug")
                         .IsUnique();
 
-                    b.ToTable("Editoras");
+                    b.ToTable("Editoras", (string)null);
                 });
 
             modelBuilder.Entity("DomoLibri.Domain.Entities.Permission", b =>
@@ -209,7 +209,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                     b.HasIndex("Codigo")
                         .IsUnique();
 
-                    b.ToTable("Permissions");
+                    b.ToTable("Permissions", (string)null);
                 });
 
             modelBuilder.Entity("DomoLibri.Domain.Entities.Role", b =>
@@ -232,7 +232,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
 
                     b.HasIndex("EditoraId");
 
-                    b.ToTable("Roles");
+                    b.ToTable("Roles", (string)null);
                 });
 
             modelBuilder.Entity("DomoLibri.Domain.Entities.UsuarioEditora", b =>
@@ -290,7 +290,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                     b.HasIndex("Email", "EditoraId")
                         .IsUnique();
 
-                    b.ToTable("UsuariosEditora");
+                    b.ToTable("UsuariosEditora", (string)null);
                 });
 
             modelBuilder.Entity("PermissionRole", b =>
