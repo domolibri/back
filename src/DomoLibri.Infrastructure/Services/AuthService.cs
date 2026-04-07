@@ -57,13 +57,48 @@ public partial class AuthService : IAuthService
 
         if (existingUser != null)
         {
-            // Security: To avoid email enumeration, we return success even if email exists.
-            // But we send an email to the user informing them of the attempt.
-            await _emailService.SendEmailAsync(email, "Tentativa de cadastro",
-                $"Olá {existingUser.Nome}, alguém tentou cadastrar uma nova editora com seu e-mail. Se foi você, lembre-se que já possui uma conta.");
+            // Existing global identity → create a new Editora and bind the user to it.
+            var novaEditora = new Editora
+            {
+                Id = Guid.NewGuid(),
+                Nome = dto.NomeEditora,
+                Slug = slug,
+                DataCriacao = DateTime.UtcNow,
+                Ativo = true
+            };
 
-            // Return a dummy EditoraId to avoid info leakage
-            return new RegisterEditoraResult(Guid.Empty);
+            var adminRoleNovo = await SeedDefaultRolesAsync(novaEditora.Id);
+
+            var novoVinculo = new VinculoUsuarioEditora
+            {
+                Id = Guid.NewGuid(),
+                EditoraId = novaEditora.Id,
+                UsuarioId = existingUser.Id,
+                Ativo = true,
+                DataEntrada = DateTime.UtcNow,
+                TipoVinculo = TipoVinculo.Administrador,
+                Roles = [adminRoleNovo]
+            };
+
+            var novoConsentimento = new ConsentimentoLGPD
+            {
+                Id = Guid.NewGuid(),
+                EditoraId = novaEditora.Id,
+                UsuarioId = novoVinculo.Id,
+                TipoConsentimento = "TermosDeUso",
+                VersaoTermo = VersaoTermosDeUso,
+                DataConsentimento = DateTime.UtcNow
+            };
+
+            _context.Editoras.Add(novaEditora);
+            _context.VinculosUsuarioEditora.Add(novoVinculo);
+            _context.ConsentimentosLGPD.Add(novoConsentimento);
+            await _context.SaveChangesAsync();
+
+            await _emailService.SendEmailAsync(existingUser.Email, "Nova editora vinculada à sua conta",
+                $"Olá {existingUser.Nome}, a editora '{dto.NomeEditora}' foi vinculada à sua conta DomoLibri.");
+
+            return new RegisterEditoraResult(novaEditora.Id);
         }
 
         var editora = new Editora
@@ -145,11 +180,15 @@ public partial class AuthService : IAuthService
             if (!usuario.EmailConfirmado)
                 throw new UnauthorizedAccessException("E-mail não verificado.");
 
-            // 1. Load the active tenant binding early so it's available for audit logging on any failure
-            vinculo = await _context.VinculosUsuarioEditora
+            // 1. Load ALL active bindings early — needed for context list and audit logging on failure
+            var vinculos = await _context.VinculosUsuarioEditora
                 .IgnoreQueryFilters()
                 .Include(v => v.Roles)
-                .FirstOrDefaultAsync(v => v.UsuarioId == usuario.Id && v.Ativo);
+                .Include(v => v.Editora)
+                .Where(v => v.UsuarioId == usuario.Id && v.Ativo)
+                .ToListAsync();
+
+            vinculo = vinculos.FirstOrDefault();
 
             // 2. Check if the account is currently locked
             if (usuario.BloqueioAte.HasValue && usuario.BloqueioAte.Value > DateTime.UtcNow)
@@ -173,11 +212,11 @@ public partial class AuthService : IAuthService
                 throw new UnauthorizedAccessException("Credenciais inválidas.");
             }
 
-            // 4. Check binding exists
-            if (vinculo is null)
+            // 4. Require at least one active binding
+            if (vinculos.Count == 0)
                 throw new UnauthorizedAccessException("Usuário sem vínculo ativo com uma editora.");
 
-            // 5. Reset lockout state on successful login
+            // 5. Reset lockout state on successful credential validation
             if (usuario.AcessosFalhos > 0 || usuario.BloqueioAte.HasValue)
             {
                 usuario.AcessosFalhos = 0;
@@ -185,29 +224,55 @@ public partial class AuthService : IAuthService
                 await _context.SaveChangesAsync();
             }
 
-            // 5. Load unique permission codes from all the user's roles
-            IReadOnlyList<string> permCodes = [];
-            if (vinculo.Roles.Count > 0)
-            {
-                var roleIds = vinculo.Roles.Select(r => r.Id).ToList();
-                permCodes = await _context.Roles
-                    .IgnoreQueryFilters()
-                    .Where(r => roleIds.Contains(r.Id))
-                    .SelectMany(r => r.Permissions)
-                    .Select(p => p.Codigo)
-                    .Distinct()
-                    .ToListAsync();
-            }
+            var contextos = vinculos
+                .Select(v => new ContextoDisponivel(
+                    v.Id,
+                    v.EditoraId,
+                    v.Editora?.Nome ?? "",
+                    v.Roles.Select(r => r.Nome).ToList()))
+                .ToList();
 
-            var token = GenerateJwt(usuario, vinculo, permCodes);
-            await AddAuthAuditLogAsync("LoginSucesso", usuario, vinculo);
-            return new LoginResult(token);
+            return new LoginResult(usuario.Id, usuario.Nome, usuario.Email, contextos);
         }
         catch (UnauthorizedAccessException)
         {
             await AddAuthAuditLogAsync("LoginFalha", usuario, vinculo, dto.Email);
             throw;
         }
+    }
+
+    public async Task<SelectContextResult> SelectContextAsync(SelectContextDto dto)
+    {
+        var vinculo = await _context.VinculosUsuarioEditora
+            .IgnoreQueryFilters()
+            .Include(v => v.Roles)
+            .FirstOrDefaultAsync(v => v.UsuarioId == dto.UsuarioId && v.EditoraId == dto.EditoraId && v.Ativo);
+
+        if (vinculo is null)
+            throw new UnauthorizedAccessException("Vínculo com a editora não encontrado ou inativo.");
+
+        var usuario = await _context.Usuarios
+            .FirstOrDefaultAsync(u => u.Id == dto.UsuarioId);
+
+        if (usuario is null)
+            throw new UnauthorizedAccessException("Usuário não encontrado.");
+
+        IReadOnlyList<string> permCodes = [];
+        if (vinculo.Roles.Count > 0)
+        {
+            var roleIds = vinculo.Roles.Select(r => r.Id).ToList();
+            permCodes = await _context.Roles
+                .IgnoreQueryFilters()
+                .Where(r => roleIds.Contains(r.Id))
+                .SelectMany(r => r.Permissions)
+                .Select(p => p.Codigo)
+                .Distinct()
+                .ToListAsync();
+        }
+
+        var token = GenerateJwt(usuario, vinculo, permCodes);
+        await AddAuthAuditLogAsync("LoginSucesso", usuario, vinculo);
+        return new SelectContextResult(token);
     }
 
     public async Task VerifyEmailAsync(VerifyEmailDto dto)

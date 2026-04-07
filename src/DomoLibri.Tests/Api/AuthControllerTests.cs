@@ -123,11 +123,15 @@ public class AuthControllerTests
     #region Login
 
     [Fact]
-    public async Task Login_ValidCredentials_Returns200WithToken()
+    public async Task Login_ValidCredentials_Returns200WithContexts()
     {
         var (controller, mockService) = CreateController();
+        var contextos = new List<ContextoDisponivel>
+        {
+            new(Guid.NewGuid(), Guid.NewGuid(), "Editora Teste", new List<string>())
+        };
         mockService.Setup(s => s.LoginAsync(It.IsAny<LoginDto>()))
-            .ReturnsAsync(new LoginResult("jwt.token.here"));
+            .ReturnsAsync(new LoginResult(Guid.NewGuid(), "Admin", "admin@teste.com", contextos));
 
         var request = new LoginRequest("admin@teste.com", "Senha@123!");
         var result = await controller.Login(request);
@@ -154,8 +158,12 @@ public class AuthControllerTests
     public async Task Login_SetsHttpOnlyCookie()
     {
         var (controller, mockService) = CreateController();
+        var contextos = new List<ContextoDisponivel>
+        {
+            new(Guid.NewGuid(), Guid.NewGuid(), "Editora Teste", new List<string>())
+        };
         mockService.Setup(s => s.LoginAsync(It.IsAny<LoginDto>()))
-            .ReturnsAsync(new LoginResult("jwt.token.here"));
+            .ReturnsAsync(new LoginResult(Guid.NewGuid(), "Admin", "admin@teste.com", contextos));
 
         var request = new LoginRequest("admin@teste.com", "Senha@123!");
         await controller.Login(request);

@@ -197,7 +197,7 @@ public class AuthServiceTests
     }
 
     [Fact]
-    public async Task RegisterAsync_ExistingEmail_SendsNotificationAndReturnsDummyResult()
+    public async Task RegisterAsync_ExistingEmail_CreatesNewEditoraAndBindsUser()
     {
         var (db, emailMock, sut) = CreateSut();
         var editora = CreateEditora("Outra Editora");
@@ -211,9 +211,17 @@ public class AuthServiceTests
 
         var result = await sut.RegisterAsync(dto);
 
-        Assert.Equal(Guid.Empty, result.EditoraId);
+        // Real EditoraId — not Guid.Empty
+        Assert.NotEqual(Guid.Empty, result.EditoraId);
+
+        // Two bindings for the same user (one per editora)
+        var vinculos = await db.VinculosUsuarioEditora.IgnoreQueryFilters()
+            .Where(v => v.UsuarioId == usuario.Id).ToListAsync();
+        Assert.Equal(2, vinculos.Count);
+
+        // Notification email sent (no verification email — user already confirmed)
         emailMock.Verify(
-            e => e.SendEmailAsync("admin@teste.com", "Tentativa de cadastro", It.IsAny<string>()),
+            e => e.SendEmailAsync("admin@teste.com", It.IsAny<string>(), It.IsAny<string>()),
             Times.Once);
         emailMock.Verify(
             e => e.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
@@ -361,7 +369,7 @@ public class AuthServiceTests
     #region LoginAsync
 
     [Fact]
-    public async Task LoginAsync_ValidCredentials_ReturnsJwtToken()
+    public async Task LoginAsync_ValidCredentials_ReturnsContextsAndJwtViaSelectContext()
     {
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
@@ -371,13 +379,18 @@ public class AuthServiceTests
         db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        var result = await sut.LoginAsync(new LoginDto("admin@teste.com", "Senha@123"));
+        var loginResult = await sut.LoginAsync(new LoginDto("admin@teste.com", "Senha@123"));
 
-        Assert.NotNull(result.Token);
-        Assert.NotEmpty(result.Token);
+        Assert.Equal(usuario.Id, loginResult.UsuarioId);
+        Assert.NotEmpty(loginResult.Contextos);
+        Assert.Equal(editora.Id, loginResult.Contextos[0].EditoraId);
+
+        var selectResult = await sut.SelectContextAsync(new SelectContextDto(loginResult.UsuarioId, editora.Id));
+        Assert.NotNull(selectResult.Token);
+        Assert.NotEmpty(selectResult.Token);
 
         var handler = new JwtSecurityTokenHandler();
-        var jwt = handler.ReadJwtToken(result.Token);
+        var jwt = handler.ReadJwtToken(selectResult.Token);
         Assert.Equal("admin@teste.com", jwt.Claims.First(c => c.Type == "email").Value);
         Assert.Equal(editora.Id.ToString(), jwt.Claims.First(c => c.Type == "tenant_id").Value);
         Assert.Equal(vinculo.Id.ToString(), jwt.Claims.First(c => c.Type == JwtRegisteredClaimNames.Sub).Value);
@@ -497,14 +510,14 @@ public class AuthServiceTests
 
         var result = await sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123"));
 
-        Assert.NotNull(result.Token);
+        Assert.NotEmpty(result.Contextos);
         var updated = await db.Usuarios.IgnoreQueryFilters().FirstAsync();
         Assert.Equal(0, updated.AcessosFalhos);
         Assert.Null(updated.BloqueioAte);
     }
 
     [Fact]
-    public async Task LoginAsync_ShortJwtSecret_ThrowsInvalidOperationException()
+    public async Task LoginAsync_ShortJwtSecret_SelectContextThrowsInvalidOperationException()
     {
         var (db, _, sut) = CreateSut(new Dictionary<string, string?> { { "Jwt:Secret", "tooshort" } });
         var editora = CreateEditora();
@@ -514,8 +527,12 @@ public class AuthServiceTests
         db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
+        // LoginAsync now succeeds — JWT generation is deferred to SelectContextAsync
+        var loginResult = await sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123"));
+        Assert.NotEmpty(loginResult.Contextos);
+
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123")));
+            () => sut.SelectContextAsync(new SelectContextDto(loginResult.UsuarioId, editora.Id)));
         Assert.Contains("32", ex.Message);
     }
 
@@ -532,7 +549,7 @@ public class AuthServiceTests
 
         // Login with differently-cased email with spaces
         var result = await sut.LoginAsync(new LoginDto("  ADMIN@TESTE.COM  ", "Senha@123"));
-        Assert.NotNull(result.Token);
+        Assert.NotEmpty(result.Contextos);
     }
 
     #endregion
@@ -558,8 +575,10 @@ public class AuthServiceTests
 
         var loginResult = await sut.LoginAsync(new LoginDto("admin@jwt.com", "Senha@123"));
 
+        var selectResult = await sut.SelectContextAsync(new SelectContextDto(loginResult.UsuarioId, registerResult.EditoraId));
+
         var handler = new JwtSecurityTokenHandler();
-        var jwt = handler.ReadJwtToken(loginResult.Token);
+        var jwt = handler.ReadJwtToken(selectResult.Token);
 
         // Role claim — AdminEditora was assigned during registration
         var roleClaims = jwt.Claims.Where(c => c.Type == "role").Select(c => c.Value).ToList();
@@ -597,7 +616,9 @@ public class AuthServiceTests
 
         var loginResult = await sut.LoginAsync(new LoginDto("admin@dedup.com", "Senha@123"));
 
-        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(loginResult.Token);
+        var selectResult = await sut.SelectContextAsync(new SelectContextDto(loginResult.UsuarioId, registerResult.EditoraId));
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(selectResult.Token);
         var permClaims = jwt.Claims.Where(c => c.Type == "permission").Select(c => c.Value).ToList();
 
         // No duplicates even though both roles share permissions
@@ -617,9 +638,11 @@ public class AuthServiceTests
         db.VinculosUsuarioEditora.Add(vinculo);
         await db.SaveChangesAsync();
 
-        var result = await sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123"));
+        var loginResult = await sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123"));
 
-        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Token);
+        var selectResult = await sut.SelectContextAsync(new SelectContextDto(loginResult.UsuarioId, editora.Id));
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(selectResult.Token);
         Assert.DoesNotContain(jwt.Claims, c => c.Type == "permission");
         Assert.DoesNotContain(jwt.Claims, c => c.Type == "role");
     }
@@ -952,6 +975,7 @@ public class AuthServiceTests
         await db.SaveChangesAsync();
 
         await sut.LoginAsync(new LoginDto(usuario.Email, "Senha@123"));
+        await sut.SelectContextAsync(new SelectContextDto(usuario.Id, editora.Id));
 
         var log = await db.AuditLogs.IgnoreQueryFilters()
             .FirstOrDefaultAsync(l => l.Acao == "LoginSucesso");

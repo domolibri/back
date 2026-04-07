@@ -65,9 +65,15 @@ public record ResetPasswordRequest(
 
     [Required(ErrorMessage = "Nova senha é obrigatória.")]
     [MinLength(8, ErrorMessage = "Senha deve ter pelo menos 8 caracteres.")]
-    [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$", 
+    [RegularExpression(@"^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$",
         ErrorMessage = "A senha deve conter pelo menos uma letra maiúscula, uma minúscula, um número e um caractere especial.")]
     string NovaSenha);
+
+public record SelectContextRequest(
+    [Required(ErrorMessage = "EditoraId é obrigatório.")]
+    Guid EditoraId);
+
+
 
 [ApiController]
 [Route("api/[controller]")]
@@ -143,7 +149,8 @@ public class AuthController : ControllerBase
     }
 
     /// <summary>
-    /// Step 3: Authenticates a user and sets a secure HttpOnly cookie with the JWT.
+    /// Step 3: Validates credentials and returns the list of available editora contexts.
+    /// Sets a short-lived pre-auth cookie. Call /select-context to obtain a scoped JWT.
     /// </summary>
     [HttpPost("login")]
     public async Task<IActionResult> Login([FromBody] LoginRequest request)
@@ -152,9 +159,60 @@ public class AuthController : ControllerBase
         {
             var dto = new LoginDto(request.Email, request.Senha);
             var result = await _authService.LoginAsync(dto);
-            
+
+            // Short-lived cookie so /select-context can identify the user without re-sending credentials
+            Response.Cookies.Append("pre_auth_user", result.UsuarioId.ToString(), new CookieOptions
+            {
+                HttpOnly = true,
+                Secure = true,
+                SameSite = SameSiteMode.Strict,
+                Expires = DateTime.UtcNow.AddMinutes(5)
+            });
+
+            return Ok(new
+            {
+                result.UsuarioId,
+                result.Nome,
+                result.Email,
+                result.Contextos,
+                Message = "Credenciais validadas. Selecione o contexto da editora."
+            });
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Problem(
+                detail: ex.Message,
+                instance: HttpContext.Request.Path,
+                statusCode: StatusCodes.Status401Unauthorized,
+                title: ProblemDetailsHelper.GetTitle(401),
+                type: ProblemDetailsHelper.GetTypeUri(401));
+        }
+    }
+
+    /// <summary>
+    /// Step 4: Selects an editora context and issues a scoped JWT.
+    /// Requires the pre_auth_user cookie set by /login.
+    /// </summary>
+    [HttpPost("select-context")]
+    public async Task<IActionResult> SelectContext([FromBody] SelectContextRequest request)
+    {
+        try
+        {
+            var preAuthCookie = Request.Cookies["pre_auth_user"];
+            if (!Guid.TryParse(preAuthCookie, out var usuarioId))
+                return Problem(
+                    detail: "Sessão inválida ou expirada. Faça login novamente.",
+                    instance: HttpContext.Request.Path,
+                    statusCode: StatusCodes.Status401Unauthorized,
+                    title: ProblemDetailsHelper.GetTitle(401),
+                    type: ProblemDetailsHelper.GetTypeUri(401));
+
+            var dto = new SelectContextDto(usuarioId, request.EditoraId);
+            var result = await _authService.SelectContextAsync(dto);
+
             SetTokenCookie(result.Token);
-            
+            Response.Cookies.Delete("pre_auth_user");
+
             return Ok(new { result.Token, Message = "Login realizado com sucesso." });
         }
         catch (UnauthorizedAccessException ex)
