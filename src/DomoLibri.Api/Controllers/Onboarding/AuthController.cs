@@ -24,7 +24,10 @@ public record RegisterRequest(
 
     [Required(ErrorMessage = "Nome do administrador é obrigatório.")]
     [MinLength(2, ErrorMessage = "Nome deve ter pelo menos 2 caracteres.")]
-    string NomeAdmin);
+    string NomeAdmin,
+
+    [Range(typeof(bool), "true", "true", ErrorMessage = "É necessário aceitar os Termos de Uso para prosseguir.")]
+    bool AceitouTermos);
 
 public record LoginRequest(
     [Required(ErrorMessage = "E-mail é obrigatório.")]
@@ -93,7 +96,8 @@ public class AuthController : ControllerBase
                 request.NomeEditora,
                 request.EmailAdmin,
                 request.Senha,
-                request.NomeAdmin);
+                request.NomeAdmin,
+                request.AceitouTermos);
 
             var result = await _authService.RegisterAsync(dto);
 

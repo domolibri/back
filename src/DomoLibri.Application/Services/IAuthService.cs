@@ -4,7 +4,8 @@ public record RegisterEditoraDto(
     string NomeEditora,
     string EmailAdmin,
     string Senha,
-    string NomeAdmin);
+    string NomeAdmin,
+    bool AceitouTermos);
 
 public record RegisterEditoraResult(Guid EditoraId);
 

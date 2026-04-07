@@ -111,10 +111,41 @@ public class AuthServiceTests
     #region RegisterAsync
 
     [Fact]
+    public async Task RegisterAsync_AceitouTermosFalse_ThrowsInvalidOperationException()
+    {
+        var (_, _, sut) = CreateSut();
+        var dto = new RegisterEditoraDto("Editora Termos", "admin@termos.com", "Senha@123", "Admin", false);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RegisterAsync(dto));
+        Assert.Contains("Termos de Uso", ex.Message);
+    }
+
+    [Fact]
+    public async Task RegisterAsync_CreatesConsentimentoLGPD_LinkedToUserAndEditora()
+    {
+        var (db, _, sut) = CreateSut();
+        var dto = new RegisterEditoraDto("Editora Consent", "admin@consent.com", "Senha@123", "Admin", true);
+
+        var result = await sut.RegisterAsync(dto);
+
+        var user = await db.UsuariosEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
+        Assert.NotNull(user);
+
+        var consent = await db.ConsentimentosLGPD.IgnoreQueryFilters().FirstOrDefaultAsync();
+        Assert.NotNull(consent);
+        Assert.Equal(result.EditoraId, consent.EditoraId);
+        Assert.Equal(user.Id, consent.UsuarioId);
+        Assert.Equal("TermosDeUso", consent.TipoConsentimento);
+        Assert.Equal("1.0", consent.VersaoTermo);
+        Assert.True(consent.DataConsentimento <= DateTime.UtcNow);
+        Assert.True(consent.DataConsentimento > DateTime.UtcNow.AddMinutes(-1));
+    }
+
+    [Fact]
     public async Task RegisterAsync_NewEditoraAndEmail_CreatesEditoraUserAndSendsEmail()
     {
         var (db, emailMock, sut) = CreateSut();
-        var dto = new RegisterEditoraDto("Editora Teste", "admin@teste.com", "Senha@123", "Admin");
+        var dto = new RegisterEditoraDto("Editora Teste", "admin@teste.com", "Senha@123", "Admin", true);
 
         var result = await sut.RegisterAsync(dto);
 
@@ -148,7 +179,7 @@ public class AuthServiceTests
         db.Editoras.Add(editora);
         await db.SaveChangesAsync();
 
-        var dto = new RegisterEditoraDto("Editora Teste", "outro@teste.com", "Senha@123", "Outro Admin");
+        var dto = new RegisterEditoraDto("Editora Teste", "outro@teste.com", "Senha@123", "Outro Admin", true);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => sut.RegisterAsync(dto));
         Assert.Contains("Editora Teste", ex.Message);
@@ -164,7 +195,7 @@ public class AuthServiceTests
         db.UsuariosEditora.Add(user);
         await db.SaveChangesAsync();
 
-        var dto = new RegisterEditoraDto("Nova Editora", "admin@teste.com", "Senha@123", "Admin Novo");
+        var dto = new RegisterEditoraDto("Nova Editora", "admin@teste.com", "Senha@123", "Admin Novo", true);
 
         var result = await sut.RegisterAsync(dto);
 
@@ -182,7 +213,7 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
 
-        var dto = new RegisterEditoraDto("Editora A", "  Admin@TESTE.COM  ", "Senha@123", "Admin");
+        var dto = new RegisterEditoraDto("Editora A", "  Admin@TESTE.COM  ", "Senha@123", "Admin", true);
         await sut.RegisterAsync(dto);
 
         var user = await db.UsuariosEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
@@ -198,7 +229,7 @@ public class AuthServiceTests
     public async Task RegisterAsync_CreatesThreeDefaultRoles_ForNewEditora()
     {
         var (db, _, sut) = CreateSut();
-        var dto = new RegisterEditoraDto("Editora Roles", "admin@roles.com", "Senha@123", "Admin");
+        var dto = new RegisterEditoraDto("Editora Roles", "admin@roles.com", "Senha@123", "Admin", true);
 
         var result = await sut.RegisterAsync(dto);
 
@@ -216,7 +247,7 @@ public class AuthServiceTests
     public async Task RegisterAsync_AdminUser_IsAssignedToAdminEditoraRole()
     {
         var (db, _, sut) = CreateSut();
-        var dto = new RegisterEditoraDto("Editora Admin", "admin@admin.com", "Senha@123", "Admin");
+        var dto = new RegisterEditoraDto("Editora Admin", "admin@admin.com", "Senha@123", "Admin", true);
 
         var result = await sut.RegisterAsync(dto);
 
@@ -233,7 +264,7 @@ public class AuthServiceTests
     public async Task RegisterAsync_SeedsAllSystemPermissions()
     {
         var (db, _, sut) = CreateSut();
-        var dto = new RegisterEditoraDto("Editora Perms", "admin@perms.com", "Senha@123", "Admin");
+        var dto = new RegisterEditoraDto("Editora Perms", "admin@perms.com", "Senha@123", "Admin", true);
 
         await sut.RegisterAsync(dto);
 
@@ -248,7 +279,7 @@ public class AuthServiceTests
     public async Task RegisterAsync_AdminEditoraRole_HasAllPermissions()
     {
         var (db, _, sut) = CreateSut();
-        var dto = new RegisterEditoraDto("Editora Full", "admin@full.com", "Senha@123", "Admin");
+        var dto = new RegisterEditoraDto("Editora Full", "admin@full.com", "Senha@123", "Admin", true);
 
         var result = await sut.RegisterAsync(dto);
 
@@ -263,7 +294,7 @@ public class AuthServiceTests
     public async Task RegisterAsync_AutorRole_HasLimitedPermissions()
     {
         var (db, _, sut) = CreateSut();
-        var dto = new RegisterEditoraDto("Editora Autor", "admin@autor.com", "Senha@123", "Admin");
+        var dto = new RegisterEditoraDto("Editora Autor", "admin@autor.com", "Senha@123", "Admin", true);
 
         var result = await sut.RegisterAsync(dto);
 
@@ -280,8 +311,8 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
 
-        await sut.RegisterAsync(new RegisterEditoraDto("Editora 1", "a@e1.com", "Senha@123", "Admin1"));
-        await sut.RegisterAsync(new RegisterEditoraDto("Editora 2", "b@e2.com", "Senha@123", "Admin2"));
+        await sut.RegisterAsync(new RegisterEditoraDto("Editora 1", "a@e1.com", "Senha@123", "Admin1", true));
+        await sut.RegisterAsync(new RegisterEditoraDto("Editora 2", "b@e2.com", "Senha@123", "Admin2", true));
 
         // Permissions are global — count must remain the same after two tenants are registered.
         var permCount = await db.Permissions.CountAsync();
@@ -304,7 +335,7 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
         var email = $"{Guid.NewGuid():N}@teste.com";
-        var dto = new RegisterEditoraDto(nomeEditora, email, "Senha@123", "Admin");
+        var dto = new RegisterEditoraDto(nomeEditora, email, "Senha@123", "Admin", true);
 
         var result = await sut.RegisterAsync(dto);
 
@@ -493,7 +524,7 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
 
         // RegisterAsync seeds the full role+permission graph for the editora.
-        var registerDto = new RegisterEditoraDto("Editora JWT", "admin@jwt.com", "Senha@123", "Admin");
+        var registerDto = new RegisterEditoraDto("Editora JWT", "admin@jwt.com", "Senha@123", "Admin", true);
         var registerResult = await sut.RegisterAsync(registerDto);
 
         // Confirm the email so login is allowed.
@@ -523,7 +554,7 @@ public class AuthServiceTests
     {
         var (db, _, sut) = CreateSut();
 
-        var registerDto = new RegisterEditoraDto("Editora Dedup", "admin@dedup.com", "Senha@123", "Admin");
+        var registerDto = new RegisterEditoraDto("Editora Dedup", "admin@dedup.com", "Senha@123", "Admin", true);
         var registerResult = await sut.RegisterAsync(registerDto);
 
         // Give the admin user a second role (GestorEditorial) that shares permissions.

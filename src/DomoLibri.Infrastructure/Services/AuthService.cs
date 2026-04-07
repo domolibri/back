@@ -33,8 +33,12 @@ public partial class AuthService : IAuthService
         _userContextProvider = userContextProvider;
     }
 
+    private const string VersaoTermosDeUso = "1.0";
+
     public async Task<RegisterEditoraResult> RegisterAsync(RegisterEditoraDto dto)
     {
+        if (!dto.AceitouTermos)
+            throw new InvalidOperationException("É necessário aceitar os Termos de Uso para concluir o cadastro.");
         var email = dto.EmailAdmin.Trim().ToLower();
 
         // 1. Check if Editora name/slug is already taken
@@ -91,8 +95,19 @@ public partial class AuthService : IAuthService
             Roles = [adminRole]
         };
 
+        var consentimento = new ConsentimentoLGPD
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = editora.Id,
+            UsuarioId = adminUser.Id,
+            TipoConsentimento = "TermosDeUso",
+            VersaoTermo = VersaoTermosDeUso,
+            DataConsentimento = DateTime.UtcNow
+        };
+
         _context.Editoras.Add(editora);
         _context.UsuariosEditora.Add(adminUser);
+        _context.ConsentimentosLGPD.Add(consentimento);
         await _context.SaveChangesAsync();
 
         var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";

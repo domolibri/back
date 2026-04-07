@@ -286,36 +286,72 @@ public class DomoLibriDbContextTests
         Assert.Equal(3, allLogs.Count);
     }
 
+    // ─── ConsentimentoLGPD ───────────────────────────────────────────────────
+
     [Fact]
-    public async Task AuditLog_StoresDadosOriginaisAndDadosNovos()
+    public async Task ConsentimentoLGPD_CanAddAndRetrieve()
     {
         var tenantId = Guid.NewGuid();
+        var usuarioId = Guid.NewGuid();
         using var db = CreateDbContext(tenantId);
 
-        var dadosOriginais = """{"email":"a***@test.com","nome":"Usuário"}""";
-        var dadosNovos = """{"email":"a***@test.com","nome":"Usuário Atualizado"}""";
+        db.Editoras.Add(new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true });
+        db.UsuariosEditora.Add(new UsuarioEditora { Id = usuarioId, EditoraId = tenantId, Email = "u@e.com", SenhaHash = "h", Nome = "U", Ativo = true });
 
-        var log = new AuditLog
+        var consentimento = new ConsentimentoLGPD
         {
             Id = Guid.NewGuid(),
             EditoraId = tenantId,
-            Acao = "Update",
-            Recurso = "UsuarioEditora",
-            RecursoId = Guid.NewGuid().ToString(),
-            IP = "192.168.0.1",
-            UserAgent = "TestAgent/1.0",
-            DataHora = DateTime.UtcNow,
-            DadosOriginais = dadosOriginais,
-            DadosNovos = dadosNovos
+            UsuarioId = usuarioId,
+            TipoConsentimento = "TermosDeUso",
+            VersaoTermo = "1.0",
+            DataConsentimento = DateTime.UtcNow
         };
-
-        db.AuditLogs.Add(log);
+        db.ConsentimentosLGPD.Add(consentimento);
         await db.SaveChangesAsync();
 
-        var found = await db.AuditLogs.FirstOrDefaultAsync(a => a.Id == log.Id);
+        var found = await db.ConsentimentosLGPD.FirstOrDefaultAsync(c => c.Id == consentimento.Id);
         Assert.NotNull(found);
-        Assert.Equal(dadosOriginais, found.DadosOriginais);
-        Assert.Equal(dadosNovos, found.DadosNovos);
+        Assert.Equal("TermosDeUso", found.TipoConsentimento);
+        Assert.Equal("1.0", found.VersaoTermo);
+        Assert.Equal(usuarioId, found.UsuarioId);
+        Assert.Equal(tenantId, found.EditoraId);
+    }
+
+    [Fact]
+    public async Task ConsentimentoLGPD_GlobalFilter_IsolatesByTenant()
+    {
+        var tenant1 = Guid.NewGuid();
+        var tenant2 = Guid.NewGuid();
+        var user1 = Guid.NewGuid();
+        var user2 = Guid.NewGuid();
+        var dbName = Guid.NewGuid().ToString();
+        var opts = new DbContextOptionsBuilder<DomoLibriDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .Options;
+
+        using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
+        seedCtx.Editoras.AddRange(
+            new Editora { Id = tenant1, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true },
+            new Editora { Id = tenant2, Nome = "E2", Slug = "e2", DataCriacao = DateTime.UtcNow, Ativo = true }
+        );
+        seedCtx.UsuariosEditora.AddRange(
+            new UsuarioEditora { Id = user1, EditoraId = tenant1, Email = "u1@e.com", SenhaHash = "h", Nome = "U1", Ativo = true },
+            new UsuarioEditora { Id = user2, EditoraId = tenant2, Email = "u2@e.com", SenhaHash = "h", Nome = "U2", Ativo = true }
+        );
+        seedCtx.ConsentimentosLGPD.AddRange(
+            new ConsentimentoLGPD { Id = Guid.NewGuid(), EditoraId = tenant1, UsuarioId = user1, TipoConsentimento = "TermosDeUso", VersaoTermo = "1.0", DataConsentimento = DateTime.UtcNow },
+            new ConsentimentoLGPD { Id = Guid.NewGuid(), EditoraId = tenant2, UsuarioId = user2, TipoConsentimento = "TermosDeUso", VersaoTermo = "1.0", DataConsentimento = DateTime.UtcNow }
+        );
+        await seedCtx.SaveChangesAsync();
+
+        var provider1 = new Mock<ITenantProvider>();
+        provider1.Setup(t => t.GetTenantId()).Returns(tenant1);
+        using var ctx1 = new DomoLibriDbContext(opts, provider1.Object);
+
+        var consents = await ctx1.ConsentimentosLGPD.ToListAsync();
+        Assert.Single(consents);
+        Assert.Equal(tenant1, consents[0].EditoraId);
     }
 }
 

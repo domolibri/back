@@ -47,7 +47,7 @@ public class AuthControllerTests
         mockService.Setup(s => s.RegisterAsync(It.IsAny<RegisterEditoraDto>()))
             .ReturnsAsync(new RegisterEditoraResult(editoraId));
 
-        var request = new RegisterRequest("Editora Teste", "admin@teste.com", "Senha@123!", "Admin");
+        var request = new RegisterRequest("Editora Teste", "admin@teste.com", "Senha@123!", "Admin", true);
         var result = await controller.Register(request);
 
         var created = Assert.IsType<CreatedResult>(result);
@@ -61,7 +61,7 @@ public class AuthControllerTests
         mockService.Setup(s => s.RegisterAsync(It.IsAny<RegisterEditoraDto>()))
             .ThrowsAsync(new InvalidOperationException("Já existe uma editora com esse nome."));
 
-        var request = new RegisterRequest("Editora Duplicada", "admin@teste.com", "Senha@123!", "Admin");
+        var request = new RegisterRequest("Editora Duplicada", "admin@teste.com", "Senha@123!", "Admin", true);
         var result = await controller.Register(request);
 
         var problem = Assert.IsType<ObjectResult>(result);
@@ -77,7 +77,7 @@ public class AuthControllerTests
             .Callback<RegisterEditoraDto>(dto => capturedDto = dto)
             .ReturnsAsync(new RegisterEditoraResult(Guid.NewGuid()));
 
-        var request = new RegisterRequest("Editora X", "x@test.com", "Senha@123!", "Admin X");
+        var request = new RegisterRequest("Editora X", "x@test.com", "Senha@123!", "Admin X", true);
         await controller.Register(request);
 
         Assert.NotNull(capturedDto);

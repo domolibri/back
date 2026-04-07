@@ -25,6 +25,7 @@ public class DomoLibriDbContext : DbContext
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<Permission> Permissions => Set<Permission>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<ConsentimentoLGPD> ConsentimentosLGPD => Set<ConsentimentoLGPD>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -39,6 +40,9 @@ public class DomoLibriDbContext : DbContext
 
         modelBuilder.Entity<AuditLog>()
             .HasQueryFilter(a => a.EditoraId == _tenantProvider.GetTenantId());
+
+        modelBuilder.Entity<ConsentimentoLGPD>()
+            .HasQueryFilter(c => c.EditoraId == _tenantProvider.GetTenantId());
 
         // 2. Entity Configurations
         modelBuilder.Entity<Editora>(entity =>
@@ -99,6 +103,23 @@ public class DomoLibriDbContext : DbContext
 
             // Composite index for the most common pattern: tenant logs in a time range
             entity.HasIndex(a => new { a.EditoraId, a.DataHora });
+        });
+
+        modelBuilder.Entity<ConsentimentoLGPD>(entity =>
+        {
+            entity.HasKey(c => c.Id);
+            entity.HasIndex(c => c.UsuarioId);
+            entity.HasIndex(c => c.EditoraId);
+
+            entity.HasOne<UsuarioEditora>()
+                  .WithMany()
+                  .HasForeignKey(c => c.UsuarioId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            entity.HasOne<Editora>()
+                  .WithMany()
+                  .HasForeignKey(c => c.EditoraId)
+                  .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }
