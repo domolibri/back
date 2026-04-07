@@ -202,4 +202,127 @@ public class InvitationServiceTests
 
         Assert.Contains("role", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    // ── E-mail content validation (Mailpit parity) ───────────────────────────
+
+    [Fact]
+    public async Task InviteUser_EmailBody_ContainsCorrectLinkAndToken()
+    {
+        var ctx = CreateSut();
+        var (_, _, role) = await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
+
+        string? capturedTo = null;
+        string? capturedBody = null;
+
+        ctx.EmailMock
+            .Setup(e => e.SendEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+            .Callback<string, string, string>((to, _, body) =>
+            {
+                capturedTo = to;
+                capturedBody = body;
+            })
+            .Returns(Task.CompletedTask);
+
+        var result = await ctx.Sut.InviteUserAsync(new InviteUserDto("convidado@editora.com", role.Id));
+
+        // Correct recipient
+        Assert.Equal("convidado@editora.com", capturedTo);
+
+        // Body must contain the register link with the token
+        var convite = await ctx.Db.Convites
+            .IgnoreQueryFilters()
+            .FirstAsync(c => c.Id == result.ConviteId);
+
+        Assert.NotNull(capturedBody);
+        Assert.Contains($"/register?token={convite.Token}", capturedBody);
+
+        // Token is 32 hex chars (128-bit from 16 random bytes)
+        Assert.Matches("^[0-9A-F]{32}$", convite.Token);
+
+        // Body references the editora name
+        Assert.Contains("Editora Teste", capturedBody);
+    }
+
+    // ── Multi-tenancy isolation ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task InviteUser_TenantIsolation_TenantACannotSeeOrConflictWithTenantBInvites()
+    {
+        var tenantA = Guid.NewGuid();
+        var tenantB = Guid.NewGuid();
+        var inviterA = Guid.NewGuid();
+        var inviterB = Guid.NewGuid();
+
+        // Both contexts share the same InMemory database name
+        const string sharedDbName = "isolation-test";
+        var options = new DbContextOptionsBuilder<DomoLibriDbContext>()
+            .UseInMemoryDatabase(sharedDbName)
+            .Options;
+
+        var dbA = new DomoLibriDbContext(options, CreateTenantMock(tenantA));
+        var dbB = new DomoLibriDbContext(options, CreateTenantMock(tenantB));
+
+        // Seed both tenants into the shared DB
+        var roleA = new Role { Id = Guid.NewGuid(), EditoraId = tenantA, Nome = "Autor" };
+        var roleB = new Role { Id = Guid.NewGuid(), EditoraId = tenantB, Nome = "Editor" };
+
+        dbA.Editoras.Add(new Editora { Id = tenantA, Nome = "Editora A", Slug = "editora-a", DataCriacao = DateTime.UtcNow, Ativo = true });
+        dbA.UsuariosEditora.Add(new UsuarioEditora { Id = inviterA, EditoraId = tenantA, Email = "admin@a.com", SenhaHash = "h", Nome = "Admin A", Ativo = true, EmailConfirmado = true });
+        dbA.Roles.Add(roleA);
+
+        dbB.Editoras.Add(new Editora { Id = tenantB, Nome = "Editora B", Slug = "editora-b", DataCriacao = DateTime.UtcNow, Ativo = true });
+        dbB.UsuariosEditora.Add(new UsuarioEditora { Id = inviterB, EditoraId = tenantB, Email = "admin@b.com", SenhaHash = "h", Nome = "Admin B", Ativo = true, EmailConfirmado = true });
+        dbB.Roles.Add(roleB);
+
+        await dbA.SaveChangesAsync();
+        await dbB.SaveChangesAsync();
+
+        var emailMock = new Mock<IEmailService>();
+        emailMock.Setup(e => e.SendEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>())).Returns(Task.CompletedTask);
+
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { { "FrontendUrl", "http://localhost:4200" } })
+            .Build();
+
+        var svcA = new InvitationService(dbA, emailMock.Object, CreateUserContextMock(inviterA), CreateTenantMock(tenantA), config);
+        var svcB = new InvitationService(dbB, emailMock.Object, CreateUserContextMock(inviterB), CreateTenantMock(tenantB), config);
+
+        // Both tenants invite the SAME email — should both succeed (scoped to their own tenant)
+        var resultA = await svcA.InviteUserAsync(new InviteUserDto("shared@colega.com", roleA.Id));
+        var resultB = await svcB.InviteUserAsync(new InviteUserDto("shared@colega.com", roleB.Id));
+
+        Assert.NotEqual(resultA.ConviteId, resultB.ConviteId);
+
+        // Verify global filter: dbA only sees tenant A's invites, dbB only sees tenant B's
+        var invitesA = await dbA.Convites.ToListAsync();
+        var invitesB = await dbB.Convites.ToListAsync();
+
+        Assert.All(invitesA, c => Assert.Equal(tenantA, c.EditoraId));
+        Assert.All(invitesB, c => Assert.Equal(tenantB, c.EditoraId));
+        Assert.DoesNotContain(invitesA, c => c.EditoraId == tenantB);
+        Assert.DoesNotContain(invitesB, c => c.EditoraId == tenantA);
+
+        // Both exist in the raw table (no filter)
+        var allConvites = await dbA.Convites.IgnoreQueryFilters().ToListAsync();
+        Assert.Contains(allConvites, c => c.EditoraId == tenantA);
+        Assert.Contains(allConvites, c => c.EditoraId == tenantB);
+    }
+
+    // ── Private test helpers ─────────────────────────────────────────────────
+
+    private static ITenantProvider CreateTenantMock(Guid tenantId)
+    {
+        var m = new Mock<ITenantProvider>();
+        m.Setup(t => t.GetTenantId()).Returns(tenantId);
+        return m.Object;
+    }
+
+    private static IUserContextProvider CreateUserContextMock(Guid userId)
+    {
+        var m = new Mock<IUserContextProvider>();
+        m.Setup(u => u.GetUserId()).Returns(userId);
+        m.Setup(u => u.GetIp()).Returns("127.0.0.1");
+        m.Setup(u => u.GetUserAgent()).Returns("Test/1.0");
+        return m.Object;
+    }
 }
