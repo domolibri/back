@@ -149,6 +149,7 @@ builder.Services.AddScoped<IUserContextProvider, HttpUserContextProvider>();
 builder.Services.Configure<AwsSettings>(builder.Configuration.GetSection("AwsSettings"));
 builder.Services.AddScoped<IStorageService, S3StorageService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
+builder.Services.AddScoped<IInvitationService, InvitationService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Smtp"));
 // SmtpEmailService is registered as itself so Hangfire can resolve it as a job type.
 builder.Services.AddScoped<SmtpEmailService>();
