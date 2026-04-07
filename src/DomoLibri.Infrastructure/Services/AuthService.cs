@@ -4,8 +4,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using DomoLibri.Application.Services;
+using DomoLibri.Domain;
 using DomoLibri.Domain.Entities;
-using DomoLibri.Domain.Enums;
 using DomoLibri.Domain.Interfaces;
 using DomoLibri.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -19,12 +19,18 @@ public partial class AuthService : IAuthService
     private readonly DomoLibriDbContext _context;
     private readonly IConfiguration _configuration;
     private readonly IEmailService _emailService;
+    private readonly IUserContextProvider _userContextProvider;
 
-    public AuthService(DomoLibriDbContext context, IConfiguration configuration, IEmailService emailService)
+    public AuthService(
+        DomoLibriDbContext context,
+        IConfiguration configuration,
+        IEmailService emailService,
+        IUserContextProvider userContextProvider)
     {
         _context = context;
         _configuration = configuration;
         _emailService = emailService;
+        _userContextProvider = userContextProvider;
     }
 
     public async Task<RegisterEditoraResult> RegisterAsync(RegisterEditoraDto dto)
@@ -69,6 +75,8 @@ public partial class AuthService : IAuthService
         var confirmationToken = GenerateSecureToken();
         var hashedConfirmationToken = HashToken(confirmationToken);
 
+        var adminRole = await SeedDefaultRolesAsync(editora.Id);
+
         var adminUser = new UsuarioEditora
         {
             Id = Guid.NewGuid(),
@@ -76,11 +84,11 @@ public partial class AuthService : IAuthService
             Email = email,
             SenhaHash = senhaHash,
             Nome = dto.NomeAdmin,
-            Role = Role.Admin,
             Ativo = true,
             EmailConfirmado = false,
             TokenConfirmacao = hashedConfirmationToken,
-            ExpiracaoToken = DateTime.UtcNow.AddHours(24)
+            ExpiracaoToken = DateTime.UtcNow.AddHours(24),
+            Roles = [adminRole]
         };
 
         _context.Editoras.Add(editora);
@@ -98,52 +106,79 @@ public partial class AuthService : IAuthService
 
     public async Task<LoginResult> LoginAsync(LoginDto dto)
     {
-        var user = await _context.UsuariosEditora
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
-
-        if (user is null)
-            throw new UnauthorizedAccessException("Credenciais inválidas.");
-
-        if (!user.Ativo)
-            throw new UnauthorizedAccessException("Usuário inativo.");
-
-        if (!user.EmailConfirmado)
-            throw new UnauthorizedAccessException("E-mail não verificado.");
-
-        // 1. Check if the account is currently locked
-        if (user.BloqueioAte.HasValue && user.BloqueioAte.Value > DateTime.UtcNow)
+        UsuarioEditora? user = null;
+        try
         {
-            var remainingTime = Math.Ceiling((user.BloqueioAte.Value - DateTime.UtcNow).TotalMinutes);
-            throw new UnauthorizedAccessException($"Esta conta está temporariamente bloqueada por múltiplas tentativas falhas. Tente novamente em {remainingTime} minuto(s).");
-        }
+            user = await _context.UsuariosEditora
+                .IgnoreQueryFilters()
+                .Include(u => u.Roles)
+                .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
 
-        // 2. Verify password
-        if (!BCrypt.Net.BCrypt.Verify(dto.Senha, user.SenhaHash))
-        {
-            // Increment failed attempts
-            user.AcessosFalhos++;
+            if (user is null)
+                throw new UnauthorizedAccessException("Credenciais inválidas.");
 
-            if (user.AcessosFalhos >= 5)
+            if (!user.Ativo)
+                throw new UnauthorizedAccessException("Usuário inativo.");
+
+            if (!user.EmailConfirmado)
+                throw new UnauthorizedAccessException("E-mail não verificado.");
+
+            // 1. Check if the account is currently locked
+            if (user.BloqueioAte.HasValue && user.BloqueioAte.Value > DateTime.UtcNow)
             {
-                user.BloqueioAte = DateTime.UtcNow.AddMinutes(15);
-                user.AcessosFalhos = 0; // Reset after locking
+                var remainingTime = Math.Ceiling((user.BloqueioAte.Value - DateTime.UtcNow).TotalMinutes);
+                throw new UnauthorizedAccessException($"Esta conta está temporariamente bloqueada por múltiplas tentativas falhas. Tente novamente em {remainingTime} minuto(s).");
             }
 
-            await _context.SaveChangesAsync();
-            throw new UnauthorizedAccessException("Credenciais inválidas.");
-        }
+            // 2. Verify password
+            if (!BCrypt.Net.BCrypt.Verify(dto.Senha, user.SenhaHash))
+            {
+                // Increment failed attempts
+                user.AcessosFalhos++;
 
-        // 3. Reset lockout state on successful login (only persist if there is something to clear)
-        if (user.AcessosFalhos > 0 || user.BloqueioAte.HasValue)
+                if (user.AcessosFalhos >= 5)
+                {
+                    user.BloqueioAte = DateTime.UtcNow.AddMinutes(15);
+                    user.AcessosFalhos = 0; // Reset after locking
+                }
+
+                await _context.SaveChangesAsync();
+                throw new UnauthorizedAccessException("Credenciais inválidas.");
+            }
+
+            // 3. Reset lockout state on successful login (only persist if there is something to clear)
+            if (user.AcessosFalhos > 0 || user.BloqueioAte.HasValue)
+            {
+                user.AcessosFalhos = 0;
+                user.BloqueioAte = null;
+                await _context.SaveChangesAsync();
+            }
+
+            // 4. Load unique permission codes from all the user's roles.
+            //    Done as a separate query so IgnoreQueryFilters is applied unambiguously —
+            //    ThenInclude on N:N skip navigations can silently re-apply global filters.
+            IReadOnlyList<string> permCodes = [];
+            if (user.Roles.Count > 0)
+            {
+                var roleIds = user.Roles.Select(r => r.Id).ToList();
+                permCodes = await _context.Roles
+                    .IgnoreQueryFilters()
+                    .Where(r => roleIds.Contains(r.Id))
+                    .SelectMany(r => r.Permissions)
+                    .Select(p => p.Codigo)
+                    .Distinct()
+                    .ToListAsync();
+            }
+
+            var token = GenerateJwt(user, permCodes);
+            await AddAuthAuditLogAsync("LoginSucesso", user);
+            return new LoginResult(token);
+        }
+        catch (UnauthorizedAccessException)
         {
-            user.AcessosFalhos = 0;
-            user.BloqueioAte = null;
-            await _context.SaveChangesAsync();
+            await AddAuthAuditLogAsync("LoginFalha", user, dto.Email);
+            throw;
         }
-
-        var token = GenerateJwt(user);
-        return new LoginResult(token);
     }
 
     public async Task VerifyEmailAsync(VerifyEmailDto dto)
@@ -245,9 +280,111 @@ public partial class AuthService : IAuthService
         user.ExpiracaoTokenRedefinicaoSenha = null;
 
         await _context.SaveChangesAsync();
+        await AddAuthAuditLogAsync("RedefinicaoSenha", user);
     }
 
-    private string GenerateJwt(UsuarioEditora user)
+    /// <summary>
+    /// Persists an authentication audit entry.
+    /// <paramref name="emailTentativa"/> is used when <paramref name="user"/> is null (e.g., user-not-found case).
+    /// Best-effort: failures are swallowed so that auth operations are never blocked by logging issues.
+    /// </summary>
+    private async Task AddAuthAuditLogAsync(string acao, UsuarioEditora? user, string? emailTentativa = null)
+    {
+        try
+        {
+            var entry = new AuditLog
+            {
+                Id = Guid.NewGuid(),
+                EditoraId = user?.EditoraId,
+                UsuarioId = user?.Id,
+                Acao = acao,
+                Recurso = "Auth",
+                RecursoId = user?.Email ?? emailTentativa ?? "",
+                IP = _userContextProvider.GetIp() ?? "",
+                UserAgent = _userContextProvider.GetUserAgent() ?? "",
+                DataHora = DateTime.UtcNow
+            };
+
+            _context.AuditLogs.Add(entry);
+            await _context.SaveChangesAsync();
+        }
+        catch
+        {
+            // Best-effort: auth audit logging must not block auth operations.
+            // TODO: forward to ILogger once injected for production observability.
+        }
+    }
+
+    /// <summary>
+    /// Creates the three default Roles for a new Editora and ensures all global
+    /// system Permission records exist (upsert by Codigo). Returns the AdminEditora role.
+    /// </summary>
+    private async Task<Role> SeedDefaultRolesAsync(Guid editoraId)
+    {
+        // 1. Upsert global permissions — create any that are not yet in the DB.
+        var allCodes = SystemPermissions.All.Select(d => d.Codigo).ToList();
+
+        var existing = await _context.Permissions
+            .Where(p => allCodes.Contains(p.Codigo))
+            .ToDictionaryAsync(p => p.Codigo);
+
+        var permissionMap = new Dictionary<string, Permission>(SystemPermissions.All.Count);
+        foreach (var def in SystemPermissions.All)
+        {
+            if (!existing.TryGetValue(def.Codigo, out var perm))
+            {
+                perm = new Permission
+                {
+                    Id = Guid.NewGuid(),
+                    Codigo = def.Codigo,
+                    Nome = def.Nome,
+                    Agrupamento = def.Agrupamento
+                };
+                _context.Permissions.Add(perm);
+            }
+            permissionMap[def.Codigo] = perm;
+        }
+
+        // 2. Helper: resolve a set of codes to tracked Permission entities.
+        List<Permission> Resolve(string[] codes) =>
+            codes.Select(c => permissionMap[c]).ToList();
+
+        // 3. Create the three default roles for this tenant.
+        var adminRole = new Role
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = editoraId,
+            Nome = "AdminEditora",
+            Descricao = "Acesso total ao sistema.",
+            Permissions = Resolve(SystemPermissions.AdminEditoraCodes)
+        };
+
+        var gestorRole = new Role
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = editoraId,
+            Nome = "GestorEditorial",
+            Descricao = "Permissões de edição e visualização.",
+            Permissions = Resolve(SystemPermissions.GestorEditorialCodes)
+        };
+
+        var autorRole = new Role
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = editoraId,
+            Nome = "Autor",
+            Descricao = "Permissões limitadas a submissão de conteúdo.",
+            Permissions = Resolve(SystemPermissions.AutorCodes)
+        };
+
+        _context.Roles.Add(adminRole);
+        _context.Roles.Add(gestorRole);
+        _context.Roles.Add(autorRole);
+
+        return adminRole;
+    }
+
+    private string GenerateJwt(UsuarioEditora user, IReadOnlyList<string> permCodes)
     {
         var jwtSection = _configuration.GetSection("Jwt");
         var secret = jwtSection["Secret"] ?? string.Empty;
@@ -262,14 +399,22 @@ public partial class AuthService : IAuthService
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
             new Claim(JwtRegisteredClaimNames.Name, user.Nome),
-            new Claim(ClaimTypes.Role, user.Role.ToString()),
             new Claim("tenant_id", user.EditoraId.ToString())
         };
+
+        // "role" short form: JwtBearerHandler maps it to ClaimTypes.Role via InboundClaimTypeMap,
+        // making [Authorize(Roles = "...")] work without any extra configuration.
+        foreach (var role in user.Roles)
+            claims.Add(new Claim("role", role.Nome));
+
+        // One "permission" claim per unique code — codes are short and deduplicated upstream.
+        foreach (var code in permCodes)
+            claims.Add(new Claim("permission", code));
 
         var token = new JwtSecurityToken(
             issuer: issuer,

@@ -31,16 +31,19 @@ services:
     volumes:
       - ./data/mailpit:/data
 
-  # 3. Emulador de Armazenamento do Azure (Azurite)
-  azurite:
-    image: mcr.microsoft.com/azure-storage/azurite
-    container_name: azurite
+  # 3. Object Storage (MinIO)
+  minio:
+    image: minio/minio
+    container_name: minio
     ports:
-      - "10000:10000" # Blob Storage acessivel no host via localhost:10000
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Console Web
+    environment:
+      MINIO_ROOT_USER: adminDomo
+      MINIO_ROOT_PASSWORD: AdminPassword123!
     volumes:
-      - ./data/azurite:/data
-    # Forca o Azurite a escutar em todos os IPs do container e ignora check de versao da API
-    command: "azurite-blob --blobHost 0.0.0.0 --blobPort 10000 --skipApiVersionCheck -l /data"
+      - minio_data:/data
+    command: "server /data --console-address \":9001\""
 
   # 4. Backend .NET 8 API
   api:
@@ -56,10 +59,11 @@ services:
       # Banco de dados
       ConnectionStrings__DefaultConnection: "Host=postgres;Database=${DB_NAME};Username=${DB_USER};Password=${DB_PASSWORD}"
 
-      # Blob Storage — conexao interna ao container do Azurite
-      ConnectionStrings__BlobStorage: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;"
-      # URL publica usada nos links retornados pela API (acesso via navegador)
-      BlobStorage__PublicEndpoint: ${BLOB_PUBLIC_ENDPOINT}
+      # Blob Storage — conexao interna ao container do MinIO
+      AwsSettings__AccessKey: adminDomo
+      AwsSettings__SecretKey: AdminPassword123!
+      AwsSettings__ServiceURL: http://minio:9000
+      AwsSettings__BucketName: editoras-logos
 
       # E-mail — aponta para o container do Mailpit
       Smtp__SmtpServer: mailpit
@@ -80,8 +84,8 @@ services:
     depends_on:
       - postgres
       - mailpit
-      - azurite
+      - minio
 
 volumes:
   postgres_data:
-  azurite_data:
+  minio_data:

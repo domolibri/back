@@ -3,6 +3,7 @@ using System;
 using DomoLibri.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DomoLibri.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(DomoLibriDbContext))]
-    partial class DomoLibriDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260407115406_AddRolesAndPermissions")]
+    partial class AddRolesAndPermissions
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -21,58 +24,6 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("DomoLibri.Domain.Entities.AuditLog", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Acao")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("DadosNovos")
-                        .HasColumnType("text");
-
-                    b.Property<string>("DadosOriginais")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("DataHora")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("EditoraId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("IP")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("Recurso")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("RecursoId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<string>("UserAgent")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("UsuarioId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("DataHora");
-
-                    b.HasIndex("EditoraId");
-
-                    b.HasIndex("EditoraId", "DataHora");
-
-                    b.ToTable("AuditLogs");
-                });
 
             modelBuilder.Entity("DomoLibri.Domain.Entities.Editora", b =>
                 {

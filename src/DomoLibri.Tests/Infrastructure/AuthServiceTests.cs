@@ -2,8 +2,8 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Cryptography;
 using System.Text;
 using DomoLibri.Application.Services;
+using DomoLibri.Domain;
 using DomoLibri.Domain.Entities;
-using DomoLibri.Domain.Enums;
 using DomoLibri.Domain.Interfaces;
 using DomoLibri.Infrastructure.Data;
 using DomoLibri.Infrastructure.Services;
@@ -18,7 +18,8 @@ public class AuthServiceTests
     #region Helpers
 
     private static (DomoLibriDbContext db, Mock<IEmailService> emailMock, AuthService sut) CreateSut(
-        Dictionary<string, string?>? configOverrides = null)
+        Dictionary<string, string?>? configOverrides = null,
+        Mock<IUserContextProvider>? userContextMock = null)
     {
         var tenantProvider = new Mock<ITenantProvider>();
         tenantProvider.Setup(t => t.GetTenantId()).Returns((Guid?)null);
@@ -54,7 +55,15 @@ public class AuthServiceTests
         emailMock.Setup(e => e.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
 
-        var sut = new AuthService(db, configuration, emailMock.Object);
+        var ctxMock = userContextMock ?? new Mock<IUserContextProvider>();
+        if (userContextMock is null)
+        {
+            ctxMock.Setup(x => x.GetUserId()).Returns((Guid?)null);
+            ctxMock.Setup(x => x.GetIp()).Returns((string?)null);
+            ctxMock.Setup(x => x.GetUserAgent()).Returns((string?)null);
+        }
+
+        var sut = new AuthService(db, configuration, emailMock.Object, ctxMock.Object);
         return (db, emailMock, sut);
     }
 
@@ -85,7 +94,6 @@ public class AuthServiceTests
             Email = email,
             SenhaHash = BCrypt.Net.BCrypt.HashPassword(senha),
             Nome = "Admin Teste",
-            Role = Role.Admin,
             Ativo = ativo,
             EmailConfirmado = emailConfirmado
         };
@@ -121,7 +129,6 @@ public class AuthServiceTests
         var user = await db.UsuariosEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
         Assert.NotNull(user);
         Assert.Equal("admin@teste.com", user.Email);
-        Assert.Equal(Role.Admin, user.Role);
         Assert.True(user.Ativo);
         Assert.False(user.EmailConfirmado);
         Assert.NotNull(user.TokenConfirmacao);
@@ -181,6 +188,104 @@ public class AuthServiceTests
         var user = await db.UsuariosEditora.IgnoreQueryFilters().FirstOrDefaultAsync();
         Assert.NotNull(user);
         Assert.Equal("admin@teste.com", user.Email);
+    }
+
+    #endregion
+
+    #region RegisterAsync — Default Roles Seed
+
+    [Fact]
+    public async Task RegisterAsync_CreatesThreeDefaultRoles_ForNewEditora()
+    {
+        var (db, _, sut) = CreateSut();
+        var dto = new RegisterEditoraDto("Editora Roles", "admin@roles.com", "Senha@123", "Admin");
+
+        var result = await sut.RegisterAsync(dto);
+
+        var roles = await db.Roles.IgnoreQueryFilters()
+            .Where(r => r.EditoraId == result.EditoraId)
+            .ToListAsync();
+
+        Assert.Equal(3, roles.Count);
+        Assert.Contains(roles, r => r.Nome == "AdminEditora");
+        Assert.Contains(roles, r => r.Nome == "GestorEditorial");
+        Assert.Contains(roles, r => r.Nome == "Autor");
+    }
+
+    [Fact]
+    public async Task RegisterAsync_AdminUser_IsAssignedToAdminEditoraRole()
+    {
+        var (db, _, sut) = CreateSut();
+        var dto = new RegisterEditoraDto("Editora Admin", "admin@admin.com", "Senha@123", "Admin");
+
+        var result = await sut.RegisterAsync(dto);
+
+        var user = await db.UsuariosEditora
+            .IgnoreQueryFilters()
+            .Include(u => u.Roles)
+            .FirstAsync(u => u.EditoraId == result.EditoraId);
+
+        Assert.Single(user.Roles);
+        Assert.Equal("AdminEditora", user.Roles.First().Nome);
+    }
+
+    [Fact]
+    public async Task RegisterAsync_SeedsAllSystemPermissions()
+    {
+        var (db, _, sut) = CreateSut();
+        var dto = new RegisterEditoraDto("Editora Perms", "admin@perms.com", "Senha@123", "Admin");
+
+        await sut.RegisterAsync(dto);
+
+        var permCount = await db.Permissions.CountAsync();
+        Assert.Equal(SystemPermissions.All.Count, permCount);
+
+        foreach (var def in SystemPermissions.All)
+            Assert.True(await db.Permissions.AnyAsync(p => p.Codigo == def.Codigo));
+    }
+
+    [Fact]
+    public async Task RegisterAsync_AdminEditoraRole_HasAllPermissions()
+    {
+        var (db, _, sut) = CreateSut();
+        var dto = new RegisterEditoraDto("Editora Full", "admin@full.com", "Senha@123", "Admin");
+
+        var result = await sut.RegisterAsync(dto);
+
+        var adminRole = await db.Roles.IgnoreQueryFilters()
+            .Include(r => r.Permissions)
+            .FirstAsync(r => r.EditoraId == result.EditoraId && r.Nome == "AdminEditora");
+
+        Assert.Equal(SystemPermissions.All.Count, adminRole.Permissions.Count);
+    }
+
+    [Fact]
+    public async Task RegisterAsync_AutorRole_HasLimitedPermissions()
+    {
+        var (db, _, sut) = CreateSut();
+        var dto = new RegisterEditoraDto("Editora Autor", "admin@autor.com", "Senha@123", "Admin");
+
+        var result = await sut.RegisterAsync(dto);
+
+        var autorRole = await db.Roles.IgnoreQueryFilters()
+            .Include(r => r.Permissions)
+            .FirstAsync(r => r.EditoraId == result.EditoraId && r.Nome == "Autor");
+
+        Assert.Equal(SystemPermissions.AutorCodes.Length, autorRole.Permissions.Count);
+        Assert.All(autorRole.Permissions, p => Assert.Contains(p.Codigo, SystemPermissions.AutorCodes));
+    }
+
+    [Fact]
+    public async Task RegisterAsync_SecondRegistration_DoesNotDuplicatePermissions()
+    {
+        var (db, _, sut) = CreateSut();
+
+        await sut.RegisterAsync(new RegisterEditoraDto("Editora 1", "a@e1.com", "Senha@123", "Admin1"));
+        await sut.RegisterAsync(new RegisterEditoraDto("Editora 2", "b@e2.com", "Senha@123", "Admin2"));
+
+        // Permissions are global — count must remain the same after two tenants are registered.
+        var permCount = await db.Permissions.CountAsync();
+        Assert.Equal(SystemPermissions.All.Count, permCount);
     }
 
     #endregion
@@ -376,6 +481,89 @@ public class AuthServiceTests
         // Login with differently-cased email with spaces
         var result = await sut.LoginAsync(new LoginDto("  ADMIN@TESTE.COM  ", "Senha@123"));
         Assert.NotNull(result.Token);
+    }
+
+    #endregion
+
+    #region LoginAsync — JWT Claims
+
+    [Fact]
+    public async Task LoginAsync_Jwt_ContainsRoleAndPermissionClaims_WhenUserHasRoles()
+    {
+        var (db, _, sut) = CreateSut();
+
+        // RegisterAsync seeds the full role+permission graph for the editora.
+        var registerDto = new RegisterEditoraDto("Editora JWT", "admin@jwt.com", "Senha@123", "Admin");
+        var registerResult = await sut.RegisterAsync(registerDto);
+
+        // Confirm the email so login is allowed.
+        var user = await db.UsuariosEditora.IgnoreQueryFilters()
+            .FirstAsync(u => u.EditoraId == registerResult.EditoraId);
+        user.EmailConfirmado = true;
+        await db.SaveChangesAsync();
+
+        var loginResult = await sut.LoginAsync(new LoginDto("admin@jwt.com", "Senha@123"));
+
+        var handler = new JwtSecurityTokenHandler();
+        var jwt = handler.ReadJwtToken(loginResult.Token);
+
+        // Role claim — AdminEditora was assigned during registration
+        var roleClaims = jwt.Claims.Where(c => c.Type == "role").Select(c => c.Value).ToList();
+        Assert.Contains("AdminEditora", roleClaims);
+
+        // Permission claims — AdminEditora carries all system permissions
+        var permClaims = jwt.Claims.Where(c => c.Type == "permission").Select(c => c.Value).ToList();
+        Assert.Equal(SystemPermissions.All.Count, permClaims.Count);
+        foreach (var def in SystemPermissions.All)
+            Assert.Contains(def.Codigo, permClaims);
+    }
+
+    [Fact]
+    public async Task LoginAsync_Jwt_PermissionsAreDeduped_WhenRolesOverlap()
+    {
+        var (db, _, sut) = CreateSut();
+
+        var registerDto = new RegisterEditoraDto("Editora Dedup", "admin@dedup.com", "Senha@123", "Admin");
+        var registerResult = await sut.RegisterAsync(registerDto);
+
+        // Give the admin user a second role (GestorEditorial) that shares permissions.
+        var adminUser = await db.UsuariosEditora.IgnoreQueryFilters()
+            .Include(u => u.Roles)
+            .FirstAsync(u => u.EditoraId == registerResult.EditoraId);
+
+        var gestorRole = await db.Roles.IgnoreQueryFilters()
+            .FirstAsync(r => r.EditoraId == registerResult.EditoraId && r.Nome == "GestorEditorial");
+
+        adminUser.Roles.Add(gestorRole);
+        adminUser.EmailConfirmado = true;
+        await db.SaveChangesAsync();
+
+        var loginResult = await sut.LoginAsync(new LoginDto("admin@dedup.com", "Senha@123"));
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(loginResult.Token);
+        var permClaims = jwt.Claims.Where(c => c.Type == "permission").Select(c => c.Value).ToList();
+
+        // No duplicates even though both roles share permissions
+        Assert.Equal(permClaims.Distinct().Count(), permClaims.Count);
+        // Still covers all permissions from AdminEditora (the superset)
+        Assert.Equal(SystemPermissions.All.Count, permClaims.Count);
+    }
+
+    [Fact]
+    public async Task LoginAsync_Jwt_ContainsNoPermissionClaims_WhenUserHasNoRoles()
+    {
+        var (db, _, sut) = CreateSut();
+        var editora = CreateEditora();
+        var user = CreateUser(editora.Id, "Senha@123");
+        db.Editoras.Add(editora);
+        db.UsuariosEditora.Add(user);
+        await db.SaveChangesAsync();
+
+        var result = await sut.LoginAsync(new LoginDto(user.Email, "Senha@123"));
+
+        var jwt = new JwtSecurityTokenHandler().ReadJwtToken(result.Token);
+        Assert.DoesNotContain(jwt.Claims, c => c.Type == "permission");
+        Assert.DoesNotContain(jwt.Claims, c => c.Type == "role");
     }
 
     #endregion
@@ -664,6 +852,142 @@ public class AuthServiceTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => sut.ResetPasswordAsync(new ResetPasswordDto(user.Email, resetToken, "NovaSenha@456")));
         Assert.Contains("expirado", ex.Message);
+    }
+
+    #endregion
+
+    #region Audit Logs — LoginAsync
+
+    private static Mock<IUserContextProvider> BuildContextMock(
+        string ip = "192.168.0.1", string userAgent = "TestBrowser/1.0")
+    {
+        var mock = new Mock<IUserContextProvider>();
+        mock.Setup(x => x.GetUserId()).Returns((Guid?)null);
+        mock.Setup(x => x.GetIp()).Returns(ip);
+        mock.Setup(x => x.GetUserAgent()).Returns(userAgent);
+        return mock;
+    }
+
+    [Fact]
+    public async Task LoginAsync_Success_LogsLoginSucesso()
+    {
+        var ctxMock = BuildContextMock("10.0.0.1", "Chrome/120");
+        var (db, _, sut) = CreateSut(userContextMock: ctxMock);
+        var editora = CreateEditora();
+        var user = CreateUser(editora.Id, "Senha@123");
+        db.Editoras.Add(editora);
+        db.UsuariosEditora.Add(user);
+        await db.SaveChangesAsync();
+
+        await sut.LoginAsync(new LoginDto(user.Email, "Senha@123"));
+
+        var log = await db.AuditLogs.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.Acao == "LoginSucesso");
+
+        Assert.NotNull(log);
+        Assert.Equal("Auth", log.Recurso);
+        Assert.Equal(user.Email, log.RecursoId);
+        Assert.Equal(user.EditoraId, log.EditoraId);
+        Assert.Equal(user.Id, log.UsuarioId);
+        Assert.Equal("10.0.0.1", log.IP);
+        Assert.Equal("Chrome/120", log.UserAgent);
+    }
+
+    [Fact]
+    public async Task LoginAsync_WrongPassword_LogsLoginFalha()
+    {
+        var ctxMock = BuildContextMock("10.0.0.2", "Firefox/120");
+        var (db, _, sut) = CreateSut(userContextMock: ctxMock);
+        var editora = CreateEditora();
+        var user = CreateUser(editora.Id, "Senha@123");
+        db.Editoras.Add(editora);
+        db.UsuariosEditora.Add(user);
+        await db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => sut.LoginAsync(new LoginDto(user.Email, "WrongPassword")));
+
+        var log = await db.AuditLogs.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.Acao == "LoginFalha");
+
+        Assert.NotNull(log);
+        Assert.Equal("Auth", log.Recurso);
+        Assert.Equal(user.Email, log.RecursoId);
+        Assert.Equal(user.EditoraId, log.EditoraId);
+        Assert.Equal("10.0.0.2", log.IP);
+    }
+
+    [Fact]
+    public async Task LoginAsync_AccountLocked_LogsLoginFalha()
+    {
+        var ctxMock = BuildContextMock("10.0.0.3");
+        var (db, _, sut) = CreateSut(userContextMock: ctxMock);
+        var editora = CreateEditora();
+        var user = CreateUser(editora.Id);
+        user.BloqueioAte = DateTime.UtcNow.AddMinutes(10);
+        db.Editoras.Add(editora);
+        db.UsuariosEditora.Add(user);
+        await db.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => sut.LoginAsync(new LoginDto(user.Email, "Senha@123")));
+
+        var log = await db.AuditLogs.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.Acao == "LoginFalha");
+
+        Assert.NotNull(log);
+        Assert.Equal(user.EditoraId, log.EditoraId);
+        Assert.Equal(user.Id, log.UsuarioId);
+    }
+
+    [Fact]
+    public async Task LoginAsync_UserNotFound_LogsLoginFalha_WithNullEditoraId()
+    {
+        var ctxMock = BuildContextMock("10.0.0.4");
+        var (db, _, sut) = CreateSut(userContextMock: ctxMock);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(
+            () => sut.LoginAsync(new LoginDto("ghost@test.com", "x")));
+
+        var log = await db.AuditLogs.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.Acao == "LoginFalha");
+
+        Assert.NotNull(log);
+        Assert.Null(log.EditoraId);
+        Assert.Null(log.UsuarioId);
+        Assert.Equal("ghost@test.com", log.RecursoId);
+    }
+
+    #endregion
+
+    #region Audit Logs — ResetPasswordAsync
+
+    [Fact]
+    public async Task ResetPasswordAsync_Success_LogsRedefinicaoSenha()
+    {
+        var ctxMock = BuildContextMock("10.0.0.5", "Mobile/Safari");
+        var (db, _, sut) = CreateSut(userContextMock: ctxMock);
+        var editora = CreateEditora();
+        const string resetToken = "audit_reset_token_xyz";
+        var user = CreateUser(editora.Id);
+        user.TokenRedefinicaoSenha = HashToken(resetToken);
+        user.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        db.Editoras.Add(editora);
+        db.UsuariosEditora.Add(user);
+        await db.SaveChangesAsync();
+
+        await sut.ResetPasswordAsync(new ResetPasswordDto(user.Email, resetToken, "NovaSenha@456"));
+
+        var log = await db.AuditLogs.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(l => l.Acao == "RedefinicaoSenha");
+
+        Assert.NotNull(log);
+        Assert.Equal("Auth", log.Recurso);
+        Assert.Equal(user.Email, log.RecursoId);
+        Assert.Equal(user.EditoraId, log.EditoraId);
+        Assert.Equal(user.Id, log.UsuarioId);
+        Assert.Equal("10.0.0.5", log.IP);
+        Assert.Equal("Mobile/Safari", log.UserAgent);
     }
 
     #endregion

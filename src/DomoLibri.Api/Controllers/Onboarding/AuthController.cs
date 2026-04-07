@@ -238,7 +238,17 @@ public class AuthController : ControllerBase
             }
         }
 
-        return Ok(new { tenantId, email, nome, nomeEditora, brandingConfigurado, logoUrl, corPrimaria });
+        var permissions = User.Claims
+            .Where(c => c.Type == "permission")
+            .Select(c => c.Value)
+            .ToList();
+
+        var roles = User.Claims
+            .Where(c => c.Type == "role")
+            .Select(c => c.Value)
+            .ToList();
+
+        return Ok(new { tenantId, email, nome, nomeEditora, brandingConfigurado, logoUrl, corPrimaria, permissions, roles });
     }
 
     /// <summary>

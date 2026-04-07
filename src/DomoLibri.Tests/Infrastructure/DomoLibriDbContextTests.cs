@@ -1,5 +1,4 @@
 using DomoLibri.Domain.Entities;
-using DomoLibri.Domain.Enums;
 using DomoLibri.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Moq;
@@ -50,8 +49,8 @@ public class DomoLibriDbContextTests
             new Editora { Id = tenantId1, Nome = "E1", Slug = "e1-shared", DataCriacao = DateTime.UtcNow, Ativo = true },
             new Editora { Id = tenantId2, Nome = "E2", Slug = "e2-shared", DataCriacao = DateTime.UtcNow, Ativo = true }
         );
-        var u1 = new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, Email = "u1@e.com", SenhaHash = "h", Nome = "U1", Role = Role.Admin, Ativo = true };
-        var u2 = new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, Email = "u2@e.com", SenhaHash = "h", Nome = "U2", Role = Role.Admin, Ativo = true };
+        var u1 = new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, Email = "u1@e.com", SenhaHash = "h", Nome = "U1", Ativo = true };
+        var u2 = new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, Email = "u2@e.com", SenhaHash = "h", Nome = "U2", Ativo = true };
         seedCtx.UsuariosEditora.AddRange(u1, u2);
         await seedCtx.SaveChangesAsync();
 
@@ -83,8 +82,8 @@ public class DomoLibriDbContextTests
             new Editora { Id = tenantId2, Nome = "E2", Slug = "e2", DataCriacao = DateTime.UtcNow, Ativo = true }
         );
         seedCtx.UsuariosEditora.AddRange(
-            new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, Email = "u1@e.com", SenhaHash = "h", Nome = "U1", Role = Role.Admin, Ativo = true },
-            new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, Email = "u2@e.com", SenhaHash = "h", Nome = "U2", Role = Role.Admin, Ativo = true }
+            new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, Email = "u1@e.com", SenhaHash = "h", Nome = "U1", Ativo = true },
+            new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, Email = "u2@e.com", SenhaHash = "h", Nome = "U2", Ativo = true }
         );
         await seedCtx.SaveChangesAsync();
 
@@ -132,7 +131,6 @@ public class DomoLibriDbContextTests
             Email = "admin@test.com",
             SenhaHash = "hash",
             Nome = "Admin",
-            Role = Role.Admin,
             Ativo = true
         };
         db.UsuariosEditora.Add(user);
@@ -157,7 +155,7 @@ public class DomoLibriDbContextTests
         seedProvider.Setup(t => t.GetTenantId()).Returns(tenantId);
         using var seedCtx = new DomoLibriDbContext(opts, seedProvider.Object);
         seedCtx.Editoras.Add(new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true });
-        seedCtx.UsuariosEditora.Add(new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId, Email = "u@e.com", SenhaHash = "h", Nome = "U", Role = Role.Admin, Ativo = true });
+        seedCtx.UsuariosEditora.Add(new UsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId, Email = "u@e.com", SenhaHash = "h", Nome = "U", Ativo = true });
         await seedCtx.SaveChangesAsync();
 
         // Query with null tenantId — filter becomes EditoraId == null, which matches nothing
@@ -168,4 +166,156 @@ public class DomoLibriDbContextTests
         var users = await ctx.UsuariosEditora.ToListAsync();
         Assert.Empty(users);
     }
+
+    // ─── AuditLog ─────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task AuditLog_CanAddAndRetrieve()
+    {
+        var tenantId = Guid.NewGuid();
+        using var db = CreateDbContext(tenantId);
+
+        var log = new AuditLog
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = tenantId,
+            UsuarioId = Guid.NewGuid(),
+            Acao = "Login",
+            Recurso = "UsuarioEditora",
+            RecursoId = Guid.NewGuid().ToString(),
+            IP = "127.0.0.1",
+            UserAgent = "TestAgent/1.0",
+            DataHora = DateTime.UtcNow,
+            DadosOriginais = null,
+            DadosNovos = null
+        };
+
+        db.AuditLogs.Add(log);
+        await db.SaveChangesAsync();
+
+        var found = await db.AuditLogs.FirstOrDefaultAsync(a => a.Id == log.Id);
+        Assert.NotNull(found);
+        Assert.Equal("Login", found.Acao);
+        Assert.Equal("127.0.0.1", found.IP);
+        Assert.Equal(tenantId, found.EditoraId);
+    }
+
+    [Fact]
+    public async Task AuditLog_GlobalFilter_IsolatesByTenant()
+    {
+        var tenant1 = Guid.NewGuid();
+        var tenant2 = Guid.NewGuid();
+        var dbName = Guid.NewGuid().ToString();
+        var opts = new DbContextOptionsBuilder<DomoLibriDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .Options;
+
+        // Seed logs for both tenants
+        using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
+        seedCtx.AuditLogs.AddRange(
+            new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant1, Acao = "Login", Recurso = "UsuarioEditora", RecursoId = "r1", IP = "1.1.1.1", UserAgent = "UA", DataHora = DateTime.UtcNow },
+            new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant2, Acao = "Insert", Recurso = "Role", RecursoId = "r2", IP = "2.2.2.2", UserAgent = "UA", DataHora = DateTime.UtcNow }
+        );
+        await seedCtx.SaveChangesAsync();
+
+        var provider1 = new Mock<ITenantProvider>();
+        provider1.Setup(t => t.GetTenantId()).Returns(tenant1);
+        using var ctx1 = new DomoLibriDbContext(opts, provider1.Object);
+
+        var logs = await ctx1.AuditLogs.ToListAsync();
+        Assert.Single(logs);
+        Assert.Equal(tenant1, logs[0].EditoraId);
+    }
+
+    [Fact]
+    public async Task AuditLog_SystemEventWithNullEditoraId_NotVisibleUnderTenantFilter()
+    {
+        var tenantId = Guid.NewGuid();
+        var dbName = Guid.NewGuid().ToString();
+        var opts = new DbContextOptionsBuilder<DomoLibriDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .Options;
+
+        // Seed a system-level log (no EditoraId)
+        using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
+        seedCtx.AuditLogs.Add(new AuditLog
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = null,
+            Acao = "SystemEvent",
+            Recurso = "System",
+            RecursoId = "sys",
+            IP = "0.0.0.0",
+            UserAgent = "System",
+            DataHora = DateTime.UtcNow
+        });
+        await seedCtx.SaveChangesAsync();
+
+        var tenantProvider = new Mock<ITenantProvider>();
+        tenantProvider.Setup(t => t.GetTenantId()).Returns(tenantId);
+        using var ctx = new DomoLibriDbContext(opts, tenantProvider.Object);
+
+        // Tenant filter (EditoraId == tenantId) must exclude null-EditoraId system logs
+        var logs = await ctx.AuditLogs.ToListAsync();
+        Assert.Empty(logs);
+    }
+
+    [Fact]
+    public async Task AuditLog_IgnoreQueryFilters_ReturnsAllLogs()
+    {
+        var tenant1 = Guid.NewGuid();
+        var tenant2 = Guid.NewGuid();
+        var dbName = Guid.NewGuid().ToString();
+        var opts = new DbContextOptionsBuilder<DomoLibriDbContext>()
+            .UseInMemoryDatabase(dbName)
+            .Options;
+
+        using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
+        seedCtx.AuditLogs.AddRange(
+            new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant1, Acao = "Login", Recurso = "UsuarioEditora", RecursoId = "r1", IP = "1.1.1.1", UserAgent = "UA", DataHora = DateTime.UtcNow },
+            new AuditLog { Id = Guid.NewGuid(), EditoraId = tenant2, Acao = "Insert", Recurso = "Role", RecursoId = "r2", IP = "2.2.2.2", UserAgent = "UA", DataHora = DateTime.UtcNow },
+            new AuditLog { Id = Guid.NewGuid(), EditoraId = null, Acao = "SystemEvent", Recurso = "System", RecursoId = "sys", IP = "0.0.0.0", UserAgent = "System", DataHora = DateTime.UtcNow }
+        );
+        await seedCtx.SaveChangesAsync();
+
+        var provider = new Mock<ITenantProvider>();
+        provider.Setup(t => t.GetTenantId()).Returns(tenant1);
+        using var ctx = new DomoLibriDbContext(opts, provider.Object);
+
+        var allLogs = await ctx.AuditLogs.IgnoreQueryFilters().ToListAsync();
+        Assert.Equal(3, allLogs.Count);
+    }
+
+    [Fact]
+    public async Task AuditLog_StoresDadosOriginaisAndDadosNovos()
+    {
+        var tenantId = Guid.NewGuid();
+        using var db = CreateDbContext(tenantId);
+
+        var dadosOriginais = """{"email":"a***@test.com","nome":"Usuário"}""";
+        var dadosNovos = """{"email":"a***@test.com","nome":"Usuário Atualizado"}""";
+
+        var log = new AuditLog
+        {
+            Id = Guid.NewGuid(),
+            EditoraId = tenantId,
+            Acao = "Update",
+            Recurso = "UsuarioEditora",
+            RecursoId = Guid.NewGuid().ToString(),
+            IP = "192.168.0.1",
+            UserAgent = "TestAgent/1.0",
+            DataHora = DateTime.UtcNow,
+            DadosOriginais = dadosOriginais,
+            DadosNovos = dadosNovos
+        };
+
+        db.AuditLogs.Add(log);
+        await db.SaveChangesAsync();
+
+        var found = await db.AuditLogs.FirstOrDefaultAsync(a => a.Id == log.Id);
+        Assert.NotNull(found);
+        Assert.Equal(dadosOriginais, found.DadosOriginais);
+        Assert.Equal(dadosNovos, found.DadosNovos);
+    }
 }
+

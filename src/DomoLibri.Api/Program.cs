@@ -5,9 +5,10 @@ using DomoLibri.Domain.Settings;
 using DomoLibri.Infrastructure.Services;
 using DomoLibri.Infrastructure.Data;
 using DomoLibri.Api;
-using Hangfire;
+using DomoLibri.Api.Authorization;using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -133,16 +134,20 @@ builder.Services.Configure<ApiBehaviorOptions>(options =>
 });
 
 // Register DbContext
-builder.Services.AddDbContext<DomoLibriDbContext>(options =>
+builder.Services.AddScoped<AuditInterceptor>();
+builder.Services.AddDbContext<DomoLibriDbContext>((provider, options) =>
 {
     options.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"));
+    options.AddInterceptors(provider.GetRequiredService<AuditInterceptor>());
 });
 
 // Register TenantProvider (Implementation to be added)
 builder.Services.AddScoped<ITenantProvider, HttpTenantProvider>();
+builder.Services.AddScoped<IUserContextProvider, HttpUserContextProvider>();
 
 // Register application services
-builder.Services.AddScoped<IStorageService, BlobStorageService>();
+builder.Services.Configure<AwsSettings>(builder.Configuration.GetSection("AwsSettings"));
+builder.Services.AddScoped<IStorageService, S3StorageService>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Smtp"));
 // SmtpEmailService is registered as itself so Hangfire can resolve it as a job type.
@@ -190,6 +195,14 @@ builder.Services
             }
         };
     });
+
+// Permission-based authorization:
+// PermissionPolicyProvider auto-generates a policy for any [Authorize(Policy = "code")]
+// attribute, treating the policy name as a permission code checked against the JWT's
+// "permission" claims. PermissionAuthorizationHandler performs the actual evaluation.
+builder.Services.AddAuthorization();
+builder.Services.AddSingleton<IAuthorizationPolicyProvider, PermissionPolicyProvider>();
+builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHandler>();
 
 var app = builder.Build();
 
@@ -313,4 +326,32 @@ public class HttpTenantProvider : ITenantProvider
 
         return null;
     }
+}
+
+// Implementation of IUserContextProvider
+public class HttpUserContextProvider : IUserContextProvider
+{
+    private readonly IHttpContextAccessor _httpContextAccessor;
+
+    public HttpUserContextProvider(IHttpContextAccessor httpContextAccessor)
+    {
+        _httpContextAccessor = httpContextAccessor;
+    }
+
+    public Guid? GetUserId()
+    {
+        // The JWT uses JwtRegisteredClaimNames.Sub ("sub") for the user ID.
+        // JwtBearerHandler maps "sub" -> ClaimTypes.NameIdentifier via InboundClaimTypeMap.
+        var claim = _httpContextAccessor.HttpContext?.User?
+            .FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? _httpContextAccessor.HttpContext?.User?.FindFirst("sub")?.Value;
+
+        return Guid.TryParse(claim, out var id) ? id : null;
+    }
+
+    public string? GetIp()
+        => _httpContextAccessor.HttpContext?.Connection?.RemoteIpAddress?.ToString();
+
+    public string? GetUserAgent()
+        => _httpContextAccessor.HttpContext?.Request?.Headers["User-Agent"].ToString();
 }

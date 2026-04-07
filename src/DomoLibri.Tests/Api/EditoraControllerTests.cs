@@ -1,7 +1,6 @@
 using DomoLibri.Application.DTOs;
 using DomoLibri.Application.Interfaces;
 using DomoLibri.Domain.Entities;
-using DomoLibri.Domain.Enums;
 using DomoLibri.Infrastructure.Data;
 using DomoLibri.Api.Controllers.Onboarding;
 using Microsoft.AspNetCore.Http;

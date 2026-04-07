@@ -1,4 +1,4 @@
-using DomoLibri.Domain.Enums;
+using DomoLibri.Domain.Attributes;
 
 namespace DomoLibri.Domain.Entities;
 
@@ -11,16 +11,20 @@ public class UsuarioEditora
     public Guid EditoraId { get; set; }
 
     public string Email { get; set; } = string.Empty;
+
+    [SensitiveData]
     public string SenhaHash { get; set; } = string.Empty;
     public string Nome { get; set; } = string.Empty;
 
-    public Role Role { get; set; }
     public bool Ativo { get; set; }
 
     public bool EmailConfirmado { get; set; }
+
+    [SensitiveData]
     public string? TokenConfirmacao { get; set; }
     public DateTime? ExpiracaoToken { get; set; }
 
+    [SensitiveData]
     public string? TokenRedefinicaoSenha { get; set; }
     public DateTime? ExpiracaoTokenRedefinicaoSenha { get; set; }
     public DateTime? SenhaAlteradaEm { get; set; }
@@ -29,6 +33,7 @@ public class UsuarioEditora
     public int AcessosFalhos { get; set; }
     public DateTime? BloqueioAte { get; set; }
 
-    // Navigation property
+    // Navigation properties
     public Editora? Editora { get; set; }
+    public ICollection<Role> Roles { get; set; } = new List<Role>();
 }

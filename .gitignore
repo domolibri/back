@@ -44,4 +44,4 @@ appsettings.Development.json
 .env
 
 # Ignore Mailpit persistent data on host
-data/
+/data/

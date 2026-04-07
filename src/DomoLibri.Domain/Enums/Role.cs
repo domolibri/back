@@ -1,7 +1,4 @@
 namespace DomoLibri.Domain.Enums;
 
-public enum Role
-{
-    Admin,
-    Editor
-}
+// Role enum replaced by DomoLibri.Domain.Entities.Role (dynamic per-tenant entity).
+

@@ -309,6 +309,55 @@ public class AuthControllerTests
     }
 
     [Fact]
+    public async Task Me_ReturnsPermissionsAndRolesFromClaims()
+    {
+        var (controller, _) = CreateController();
+
+        var claims = new List<Claim>
+        {
+            new("tenant_id", Guid.NewGuid().ToString()),
+            new("role", "AdminEditora"),
+            new("permission", "usuarios.ler"),
+            new("permission", "obras.escrever")
+        };
+        var identity = new ClaimsIdentity(claims, "TestAuth");
+        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(identity);
+
+        var result = await controller.Me();
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var value = ok.Value!;
+        var type = value.GetType();
+
+        var returnedRoles = (System.Collections.Generic.List<string>)type.GetProperty("roles")!.GetValue(value)!;
+        var returnedPerms = (System.Collections.Generic.List<string>)type.GetProperty("permissions")!.GetValue(value)!;
+
+        Assert.Contains("AdminEditora", returnedRoles);
+        Assert.Contains("usuarios.ler", returnedPerms);
+        Assert.Contains("obras.escrever", returnedPerms);
+    }
+
+    [Fact]
+    public async Task Me_WhenNoClaims_ReturnsEmptyPermissionsAndRoles()
+    {
+        var (controller, _) = CreateController();
+        var identity = new ClaimsIdentity(new[] { new Claim("tenant_id", Guid.NewGuid().ToString()) }, "TestAuth");
+        controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(identity);
+
+        var result = await controller.Me();
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var value = ok.Value!;
+        var type = value.GetType();
+
+        var returnedRoles = (System.Collections.Generic.List<string>)type.GetProperty("roles")!.GetValue(value)!;
+        var returnedPerms = (System.Collections.Generic.List<string>)type.GetProperty("permissions")!.GetValue(value)!;
+
+        Assert.Empty(returnedRoles);
+        Assert.Empty(returnedPerms);
+    }
+
+    [Fact]
     public async Task Me_WhenBrandingConfigured_ReturnsBrandingConfiguradoTrue()
     {
         var (controller, _) = CreateController();

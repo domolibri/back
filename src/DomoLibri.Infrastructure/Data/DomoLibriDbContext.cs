@@ -22,17 +22,23 @@ public class DomoLibriDbContext : DbContext
 
     public DbSet<Editora> Editoras => Set<Editora>();
     public DbSet<UsuarioEditora> UsuariosEditora => Set<UsuarioEditora>();
+    public DbSet<Role> Roles => Set<Role>();
+    public DbSet<Permission> Permissions => Set<Permission>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
-        // 1. Global Query Filter for Multi-Tenancy
-        // This ensures every query on UsuarioEditora automatically filters by the current EditoraId.
-        // We reference _tenantProvider.GetTenantId() directly in the expression so EF Core
-        // can evaluate it dynamically for each query.
+        // 1. Global Query Filters for Multi-Tenancy
         modelBuilder.Entity<UsuarioEditora>()
             .HasQueryFilter(u => u.EditoraId == _tenantProvider.GetTenantId());
+
+        modelBuilder.Entity<Role>()
+            .HasQueryFilter(r => r.EditoraId == _tenantProvider.GetTenantId());
+
+        modelBuilder.Entity<AuditLog>()
+            .HasQueryFilter(a => a.EditoraId == _tenantProvider.GetTenantId());
 
         // 2. Entity Configurations
         modelBuilder.Entity<Editora>(entity =>
@@ -53,6 +59,46 @@ public class DomoLibriDbContext : DbContext
                   .WithMany(e => e.Usuarios)
                   .HasForeignKey(u => u.EditoraId)
                   .OnDelete(DeleteBehavior.Restrict);
+
+            // N:N with Role via UsuarioRoles junction table
+            entity.HasMany(u => u.Roles)
+                  .WithMany(r => r.Usuarios)
+                  .UsingEntity(j => j.ToTable("UsuarioRoles"));
+        });
+
+        modelBuilder.Entity<Role>(entity =>
+        {
+            entity.HasKey(r => r.Id);
+
+            entity.HasOne<Editora>()
+                  .WithMany()
+                  .HasForeignKey(r => r.EditoraId)
+                  .OnDelete(DeleteBehavior.Cascade);
+
+            // N:N with Permission via RolePermissions junction table
+            entity.HasMany(r => r.Permissions)
+                  .WithMany()
+                  .UsingEntity(j => j.ToTable("RolePermissions"));
+        });
+
+        modelBuilder.Entity<Permission>(entity =>
+        {
+            entity.HasKey(p => p.Id);
+            entity.HasIndex(p => p.Codigo).IsUnique();
+        });
+
+        modelBuilder.Entity<AuditLog>(entity =>
+        {
+            entity.HasKey(a => a.Id);
+
+            // Index for per-tenant queries
+            entity.HasIndex(a => a.EditoraId);
+
+            // Index for time-range queries
+            entity.HasIndex(a => a.DataHora);
+
+            // Composite index for the most common pattern: tenant logs in a time range
+            entity.HasIndex(a => new { a.EditoraId, a.DataHora });
         });
     }
 }

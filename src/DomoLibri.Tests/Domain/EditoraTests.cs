@@ -1,5 +1,4 @@
 using DomoLibri.Domain.Entities;
-using DomoLibri.Domain.Enums;
 
 namespace DomoLibri.Tests.Domain;
 
@@ -56,8 +55,7 @@ public class EditoraTests
         {
             Id = Guid.NewGuid(),
             EditoraId = editoraId,
-            Email = "admin@teste.com",
-            Role = Role.Admin
+            Email = "admin@teste.com"
         };
 
         editora.Usuarios.Add(usuario);

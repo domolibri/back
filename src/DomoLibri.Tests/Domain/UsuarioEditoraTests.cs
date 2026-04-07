@@ -1,5 +1,4 @@
 using DomoLibri.Domain.Entities;
-using DomoLibri.Domain.Enums;
 
 namespace DomoLibri.Tests.Domain;
 
@@ -15,7 +14,6 @@ public class UsuarioEditoraTests
         Assert.Equal(string.Empty, usuario.Email);
         Assert.Equal(string.Empty, usuario.SenhaHash);
         Assert.Equal(string.Empty, usuario.Nome);
-        Assert.Equal(default(Role), usuario.Role);
         Assert.False(usuario.Ativo);
         Assert.False(usuario.EmailConfirmado);
         Assert.Null(usuario.TokenConfirmacao);
@@ -25,6 +23,8 @@ public class UsuarioEditoraTests
         Assert.Equal(0, usuario.AcessosFalhos);
         Assert.Null(usuario.BloqueioAte);
         Assert.Null(usuario.Editora);
+        Assert.NotNull(usuario.Roles);
+        Assert.Empty(usuario.Roles);
     }
 
     [Fact]
@@ -41,7 +41,6 @@ public class UsuarioEditoraTests
             Email = "usuario@editora.com",
             SenhaHash = "hashed_password",
             Nome = "Usuário Teste",
-            Role = Role.Editor,
             Ativo = true,
             EmailConfirmado = true,
             TokenConfirmacao = "abc123token",
@@ -57,7 +56,6 @@ public class UsuarioEditoraTests
         Assert.Equal("usuario@editora.com", usuario.Email);
         Assert.Equal("hashed_password", usuario.SenhaHash);
         Assert.Equal("Usuário Teste", usuario.Nome);
-        Assert.Equal(Role.Editor, usuario.Role);
         Assert.True(usuario.Ativo);
         Assert.True(usuario.EmailConfirmado);
         Assert.Equal("abc123token", usuario.TokenConfirmacao);
@@ -66,13 +64,6 @@ public class UsuarioEditoraTests
         Assert.Equal(now.AddHours(1), usuario.ExpiracaoTokenRedefinicaoSenha);
         Assert.Equal(3, usuario.AcessosFalhos);
         Assert.Equal(now.AddMinutes(15), usuario.BloqueioAte);
-    }
-
-    [Fact]
-    public void UsuarioEditora_Role_DefaultIsAdmin()
-    {
-        var usuario = new UsuarioEditora();
-        Assert.Equal(Role.Admin, usuario.Role);
     }
 
     [Fact]
