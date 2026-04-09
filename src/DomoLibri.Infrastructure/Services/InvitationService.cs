@@ -47,7 +47,7 @@ public class InvitationService : IInvitationService
         // 1. Guard: email must not already belong to a user with an active binding in this editora.
         //    Global query filter scopes the check to the current tenant automatically.
         var jaVinculado = await _context.VinculosUsuarioEditora
-            .AnyAsync(v => v.Usuario!.Email == email);
+            .AnyAsync(v => v.Usuario!.Email == new DomoLibri.Domain.ValueObjects.Email(email));
 
         if (jaVinculado)
             throw new InvalidOperationException($"O e-mail '{email}' já pertence a um usuário desta editora.");

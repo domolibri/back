@@ -11,6 +11,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // -- Step 1: Drop FKs from dependent tables that reference the old UsuariosEditora --
             migrationBuilder.DropForeignKey(
                 name: "FK_ConsentimentosLGPD_UsuariosEditora_UsuarioId",
                 table: "ConsentimentosLGPD");
@@ -19,12 +20,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                 name: "FK_Convites_UsuariosEditora_ConvidadoPorUsuarioId",
                 table: "Convites");
 
-            migrationBuilder.DropTable(
-                name: "UsuarioRoles");
-
-            migrationBuilder.DropTable(
-                name: "UsuariosEditora");
-
+            // -- Step 2: Create the new global Usuarios table (identity + credentials) --
             migrationBuilder.CreateTable(
                 name: "Usuarios",
                 columns: table => new
@@ -47,6 +43,26 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                     table.PrimaryKey("PK_Usuarios", x => x.Id);
                 });
 
+            // -- Step 3: Seed Usuarios with one record per unique email --
+            // DISTINCT ON picks a canonical row when the same email exists in multiple tenants.
+            // The row with the lowest Id is chosen for determinism.
+            migrationBuilder.Sql("""
+                INSERT INTO "Usuarios" (
+                    "Id", "Email", "SenhaHash", "Nome", "EmailConfirmado",
+                    "TokenConfirmacao", "ExpiracaoToken",
+                    "TokenRedefinicaoSenha", "ExpiracaoTokenRedefinicaoSenha",
+                    "SenhaAlteradaEm", "AcessosFalhos", "BloqueioAte"
+                )
+                SELECT DISTINCT ON ("Email")
+                    gen_random_uuid(), "Email", "SenhaHash", "Nome", "EmailConfirmado",
+                    "TokenConfirmacao", "ExpiracaoToken",
+                    "TokenRedefinicaoSenha", "ExpiracaoTokenRedefinicaoSenha",
+                    "SenhaAlteradaEm", "AcessosFalhos", "BloqueioAte"
+                FROM "UsuariosEditora"
+                ORDER BY "Email", "Id";
+                """);
+
+            // -- Step 4: Create VinculosUsuarioEditora with the new normalized structure --
             migrationBuilder.CreateTable(
                 name: "VinculosUsuarioEditora",
                 columns: table => new
@@ -75,6 +91,25 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                         onDelete: ReferentialAction.Cascade);
                 });
 
+            // -- Step 5: Migrate bindings, preserving original Ids so UsuarioRoles FKs remain valid --
+            // DataEntrada defaults to migration time (field did not exist in the old schema).
+            // TipoVinculo defaults to 0 (Colaborador).
+            migrationBuilder.Sql("""
+                INSERT INTO "VinculosUsuarioEditora" (
+                    "Id", "EditoraId", "UsuarioId", "Ativo", "DataEntrada", "TipoVinculo"
+                )
+                SELECT
+                    ue."Id",
+                    ue."EditoraId",
+                    u."Id",
+                    ue."Ativo",
+                    CURRENT_TIMESTAMP,
+                    0
+                FROM "UsuariosEditora" ue
+                JOIN "Usuarios" u ON u."Email" = ue."Email";
+                """);
+
+            // -- Step 6: Recreate role-assignment junction table under the new name --
             migrationBuilder.CreateTable(
                 name: "VinculoRoles",
                 columns: table => new
@@ -99,6 +134,18 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                         onDelete: ReferentialAction.Cascade);
                 });
 
+            // Carry over all existing role assignments; Ids are stable so no mapping needed.
+            migrationBuilder.Sql("""
+                INSERT INTO "VinculoRoles" ("RolesId", "UsuariosId")
+                SELECT "RolesId", "UsuariosId"
+                FROM "UsuarioRoles";
+                """);
+
+            // -- Step 7: Drop old tables (data already migrated above) --
+            migrationBuilder.DropTable(name: "UsuarioRoles");
+            migrationBuilder.DropTable(name: "UsuariosEditora");
+
+            // -- Step 8: Create indexes --
             migrationBuilder.CreateIndex(
                 name: "IX_Usuarios_Email",
                 table: "Usuarios",
@@ -120,6 +167,7 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                 table: "VinculosUsuarioEditora",
                 column: "UsuarioId");
 
+            // -- Step 9: Re-add FKs from dependent tables, now pointing to VinculosUsuarioEditora --
             migrationBuilder.AddForeignKey(
                 name: "FK_ConsentimentosLGPD_VinculosUsuarioEditora_UsuarioId",
                 table: "ConsentimentosLGPD",

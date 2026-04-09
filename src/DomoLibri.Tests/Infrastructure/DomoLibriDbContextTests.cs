@@ -23,18 +23,14 @@ public class DomoLibriDbContextTests
     [Fact]
     public async Task GlobalQueryFilter_FiltersByCurrentTenantId()
     {
-        var tenantId1 = Guid.NewGuid();
-        var tenantId2 = Guid.NewGuid();
-
-        // Seed data bypassing filters (use context without filter)
-        using var seedDb = CreateDbContext(null);
-        var editora1 = new Editora { Id = tenantId1, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true };
-        var editora2 = new Editora { Id = tenantId2, Nome = "E2", Slug = "e2", DataCriacao = DateTime.UtcNow, Ativo = true };
-        seedDb.Editoras.AddRange(editora1, editora2);
-        await seedDb.SaveChangesAsync();
-
         // We need a shared in-memory database name to share data
         var dbName = Guid.NewGuid().ToString();
+
+        var editora1 = new Editora("E1", "e1-shared");
+        var editora2 = new Editora("E2", "e2-shared");
+        var tenantId1 = editora1.Id;
+        var tenantId2 = editora2.Id;
+
         var tenantProvider1 = new Mock<ITenantProvider>();
         tenantProvider1.Setup(t => t.GetTenantId()).Returns(tenantId1);
         var tenantProvider2 = new Mock<ITenantProvider>();
@@ -46,12 +42,9 @@ public class DomoLibriDbContextTests
 
         // Seed both vinculos in the same in-memory DB
         using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
-        seedCtx.Editoras.AddRange(
-            new Editora { Id = tenantId1, Nome = "E1", Slug = "e1-shared", DataCriacao = DateTime.UtcNow, Ativo = true },
-            new Editora { Id = tenantId2, Nome = "E2", Slug = "e2-shared", DataCriacao = DateTime.UtcNow, Ativo = true }
-        );
-        var gu1 = new Usuario { Id = Guid.NewGuid(), Email = "u1@e.com", SenhaHash = "h", Nome = "U1" };
-        var gu2 = new Usuario { Id = Guid.NewGuid(), Email = "u2@e.com", SenhaHash = "h", Nome = "U2" };
+        seedCtx.Editoras.AddRange(editora1, editora2);
+        var gu1 = new Usuario("u1@e.com", "h", "U1");
+        var gu2 = new Usuario("u2@e.com", "h", "U2");
         var v1 = new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, UsuarioId = gu1.Id, Ativo = true };
         var v2 = new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId2, UsuarioId = gu2.Id, Ativo = true };
         seedCtx.Usuarios.AddRange(gu1, gu2);
@@ -69,9 +62,12 @@ public class DomoLibriDbContextTests
     [Fact]
     public async Task IgnoreQueryFilters_ReturnsAllUsers()
     {
-        var tenantId1 = Guid.NewGuid();
-        var tenantId2 = Guid.NewGuid();
         var dbName = Guid.NewGuid().ToString();
+
+        var editora1 = new Editora("E1", "e1");
+        var editora2 = new Editora("E2", "e2");
+        var tenantId1 = editora1.Id;
+        var tenantId2 = editora2.Id;
 
         var opts = new DbContextOptionsBuilder<DomoLibriDbContext>()
             .UseInMemoryDatabase(dbName)
@@ -81,12 +77,9 @@ public class DomoLibriDbContextTests
         tenantProvider.Setup(t => t.GetTenantId()).Returns(tenantId1);
 
         using var seedCtx = new DomoLibriDbContext(opts, tenantProvider.Object);
-        seedCtx.Editoras.AddRange(
-            new Editora { Id = tenantId1, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true },
-            new Editora { Id = tenantId2, Nome = "E2", Slug = "e2", DataCriacao = DateTime.UtcNow, Ativo = true }
-        );
-        var gu1 = new Usuario { Id = Guid.NewGuid(), Email = "u1@e.com", SenhaHash = "h", Nome = "U1" };
-        var gu2 = new Usuario { Id = Guid.NewGuid(), Email = "u2@e.com", SenhaHash = "h", Nome = "U2" };
+        seedCtx.Editoras.AddRange(editora1, editora2);
+        var gu1 = new Usuario("u1@e.com", "h", "U1");
+        var gu2 = new Usuario("u2@e.com", "h", "U2");
         seedCtx.Usuarios.AddRange(gu1, gu2);
         seedCtx.VinculosUsuarioEditora.AddRange(
             new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId1, UsuarioId = gu1.Id, Ativo = true },
@@ -104,15 +97,8 @@ public class DomoLibriDbContextTests
     [Fact]
     public async Task DbSets_CanAddAndRetrieveEditoras()
     {
+        var editora = new Editora("Editora Teste", "editora-teste");
         using var db = CreateDbContext();
-        var editora = new Editora
-        {
-            Id = Guid.NewGuid(),
-            Nome = "Editora Teste",
-            Slug = "editora-teste",
-            DataCriacao = DateTime.UtcNow,
-            Ativo = true
-        };
 
         db.Editoras.Add(editora);
         await db.SaveChangesAsync();
@@ -125,23 +111,16 @@ public class DomoLibriDbContextTests
     [Fact]
     public async Task DbSets_CanAddAndRetrieveVinculosUsuarioEditora()
     {
-        var tenantId = Guid.NewGuid();
-        using var db = CreateDbContext(tenantId);
+        var editora = new Editora("E1", "e1");
+        using var db = CreateDbContext(editora.Id);
 
-        var editora = new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true };
         db.Editoras.Add(editora);
 
-        var usuario = new Usuario
-        {
-            Id = Guid.NewGuid(),
-            Email = "admin@test.com",
-            SenhaHash = "hash",
-            Nome = "Admin"
-        };
+        var usuario = new Usuario("admin@test.com", "hash", "Admin");
         var vinculo = new VinculoUsuarioEditora
         {
             Id = Guid.NewGuid(),
-            EditoraId = tenantId,
+            EditoraId = editora.Id,
             UsuarioId = usuario.Id,
             Ativo = true
         };
@@ -151,24 +130,25 @@ public class DomoLibriDbContextTests
 
         var found = await db.VinculosUsuarioEditora.FirstOrDefaultAsync(v => v.Id == vinculo.Id);
         Assert.NotNull(found);
-        Assert.Equal(tenantId, found.EditoraId);
+        Assert.Equal(editora.Id, found.EditoraId);
     }
 
     [Fact]
     public async Task GlobalQueryFilter_WithNullTenantId_ReturnsNoUsers()
     {
-        var tenantId = Guid.NewGuid();
         var dbName = Guid.NewGuid().ToString();
         var opts = new DbContextOptionsBuilder<DomoLibriDbContext>()
             .UseInMemoryDatabase(dbName)
             .Options;
 
         // Seed with a specific tenant
+        var editora = new Editora("E1", "e1");
+        var tenantId = editora.Id;
         var seedProvider = new Mock<ITenantProvider>();
         seedProvider.Setup(t => t.GetTenantId()).Returns(tenantId);
         using var seedCtx = new DomoLibriDbContext(opts, seedProvider.Object);
-        seedCtx.Editoras.Add(new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true });
-        var gu = new Usuario { Id = Guid.NewGuid(), Email = "u@e.com", SenhaHash = "h", Nome = "U" };
+        seedCtx.Editoras.Add(editora);
+        var gu = new Usuario("u@e.com", "h", "U");
         seedCtx.Usuarios.Add(gu);
         seedCtx.VinculosUsuarioEditora.Add(new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId, UsuarioId = gu.Id, Ativo = true });
         await seedCtx.SaveChangesAsync();
@@ -306,12 +286,11 @@ public class DomoLibriDbContextTests
     [Fact]
     public async Task ConsentimentoLGPD_CanAddAndRetrieve()
     {
-        var tenantId = Guid.NewGuid();
-        using var db = CreateDbContext(tenantId);
+        var editora = new Editora("E1", "e1");
+        using var db = CreateDbContext(editora.Id);
 
-        var editora = new Editora { Id = tenantId, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true };
-        var usuario = new Usuario { Id = Guid.NewGuid(), Email = "u@e.com", SenhaHash = "h", Nome = "U" };
-        var vinculo = new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = tenantId, UsuarioId = usuario.Id, Ativo = true };
+        var usuario = new Usuario("u@e.com", "h", "U");
+        var vinculo = new VinculoUsuarioEditora { Id = Guid.NewGuid(), EditoraId = editora.Id, UsuarioId = usuario.Id, Ativo = true };
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -319,7 +298,7 @@ public class DomoLibriDbContextTests
         var consentimento = new ConsentimentoLGPD
         {
             Id = Guid.NewGuid(),
-            EditoraId = tenantId,
+            EditoraId = editora.Id,
             UsuarioId = vinculo.Id,
             TipoConsentimento = "TermosDeUso",
             VersaoTermo = "1.0",
@@ -333,14 +312,12 @@ public class DomoLibriDbContextTests
         Assert.Equal("TermosDeUso", found.TipoConsentimento);
         Assert.Equal("1.0", found.VersaoTermo);
         Assert.Equal(vinculo.Id, found.UsuarioId);
-        Assert.Equal(tenantId, found.EditoraId);
+        Assert.Equal(editora.Id, found.EditoraId);
     }
 
     [Fact]
     public async Task ConsentimentoLGPD_GlobalFilter_IsolatesByTenant()
     {
-        var tenant1 = Guid.NewGuid();
-        var tenant2 = Guid.NewGuid();
         var user1 = Guid.NewGuid();
         var user2 = Guid.NewGuid();
         var dbName = Guid.NewGuid().ToString();
@@ -348,13 +325,15 @@ public class DomoLibriDbContextTests
             .UseInMemoryDatabase(dbName)
             .Options;
 
+        var editora1 = new Editora("E1", "e1");
+        var editora2 = new Editora("E2", "e2");
+        var tenant1 = editora1.Id;
+        var tenant2 = editora2.Id;
+
         using var seedCtx = new DomoLibriDbContext(opts, new Mock<ITenantProvider>().Object);
-        seedCtx.Editoras.AddRange(
-            new Editora { Id = tenant1, Nome = "E1", Slug = "e1", DataCriacao = DateTime.UtcNow, Ativo = true },
-            new Editora { Id = tenant2, Nome = "E2", Slug = "e2", DataCriacao = DateTime.UtcNow, Ativo = true }
-        );
-        var gu1 = new Usuario { Id = Guid.NewGuid(), Email = "u1@e.com", SenhaHash = "h", Nome = "U1" };
-        var gu2 = new Usuario { Id = Guid.NewGuid(), Email = "u2@e.com", SenhaHash = "h", Nome = "U2" };
+        seedCtx.Editoras.AddRange(editora1, editora2);
+        var gu1 = new Usuario("u1@e.com", "h", "U1");
+        var gu2 = new Usuario("u2@e.com", "h", "U2");
         var v1 = new VinculoUsuarioEditora { Id = user1, EditoraId = tenant1, UsuarioId = gu1.Id, Ativo = true };
         var v2 = new VinculoUsuarioEditora { Id = user2, EditoraId = tenant2, UsuarioId = gu2.Id, Ativo = true };
         seedCtx.Usuarios.AddRange(gu1, gu2);

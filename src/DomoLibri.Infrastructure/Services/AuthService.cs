@@ -2,9 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.RegularExpressions;
 using DomoLibri.Application.Services;
-using DomoLibri.Domain;
 using DomoLibri.Domain.Entities;
 using DomoLibri.Domain.Enums;
 using DomoLibri.Domain.Interfaces;
@@ -15,23 +13,32 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace DomoLibri.Infrastructure.Services;
 
-public partial class AuthService : IAuthService
+public class AuthService : IAuthService
 {
     private readonly DomoLibriDbContext _context;
     private readonly IConfiguration _configuration;
-    private readonly IEmailService _emailService;
+    private readonly INotificationService _notificationService;
+    private readonly ITenantSetupService _tenantSetupService;
     private readonly IUserContextProvider _userContextProvider;
+    private readonly IUsuarioRepository _usuarioRepository;
+    private readonly IEditoraRepository _editoraRepository;
 
     public AuthService(
         DomoLibriDbContext context,
         IConfiguration configuration,
-        IEmailService emailService,
-        IUserContextProvider userContextProvider)
+        INotificationService notificationService,
+        ITenantSetupService tenantSetupService,
+        IUserContextProvider userContextProvider,
+        IUsuarioRepository usuarioRepository,
+        IEditoraRepository editoraRepository)
     {
         _context = context;
         _configuration = configuration;
-        _emailService = emailService;
+        _notificationService = notificationService;
+        _tenantSetupService = tenantSetupService;
         _userContextProvider = userContextProvider;
+        _usuarioRepository = usuarioRepository;
+        _editoraRepository = editoraRepository;
     }
 
     private const string VersaoTermosDeUso = "1.0";
@@ -40,34 +47,25 @@ public partial class AuthService : IAuthService
     {
         if (!dto.AceitouTermos)
             throw new InvalidOperationException("É necessário aceitar os Termos de Uso para concluir o cadastro.");
+
         var email = dto.EmailAdmin.Trim().ToLower();
 
         // 1. Check if Editora name/slug is already taken
-        var slug = GerarSlug(dto.NomeEditora);
-
-        var slugExiste = await _context.Editoras
-            .AnyAsync(e => e.Slug == slug);
-
+        var slugExiste = await _tenantSetupService.SlugExisteAsync(dto.NomeEditora);
         if (slugExiste)
             throw new InvalidOperationException($"Já existe uma editora com o nome '{dto.NomeEditora}'.");
 
+        var slug = _tenantSetupService.GerarSlug(dto.NomeEditora);
+
         // 2. Check if Email is already registered globally
-        var existingUser = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.Email == email);
+        var existingUser = await _usuarioRepository.FindByEmailAsync(email);
 
         if (existingUser != null)
         {
             // Existing global identity → create a new Editora and bind the user to it.
-            var novaEditora = new Editora
-            {
-                Id = Guid.NewGuid(),
-                Nome = dto.NomeEditora,
-                Slug = slug,
-                DataCriacao = DateTime.UtcNow,
-                Ativo = true
-            };
+            var novaEditora = new Editora(dto.NomeEditora, slug);
 
-            var adminRoleNovo = await SeedDefaultRolesAsync(novaEditora.Id);
+            var adminRoleNovo = await _tenantSetupService.SeedDefaultRolesAsync(novaEditora.Id);
 
             var novoVinculo = new VinculoUsuarioEditora
             {
@@ -95,38 +93,22 @@ public partial class AuthService : IAuthService
             _context.ConsentimentosLGPD.Add(novoConsentimento);
             await _context.SaveChangesAsync();
 
-            await _emailService.SendEmailAsync(existingUser.Email, "Nova editora vinculada à sua conta",
-                $"Olá {existingUser.Nome}, a editora '{dto.NomeEditora}' foi vinculada à sua conta DomoLibri.");
+            await _notificationService.SendEditoraLinkedEmailAsync(existingUser.Email, existingUser.Nome, dto.NomeEditora);
 
             return new RegisterEditoraResult(novaEditora.Id);
         }
 
-        var editora = new Editora
-        {
-            Id = Guid.NewGuid(),
-            Nome = dto.NomeEditora,
-            Slug = slug,
-            DataCriacao = DateTime.UtcNow,
-            Ativo = true
-        };
+        var editora = new Editora(dto.NomeEditora, slug);
 
         var senhaHash = BCrypt.Net.BCrypt.HashPassword(dto.Senha);
         var confirmationToken = GenerateSecureToken();
         var hashedConfirmationToken = HashToken(confirmationToken);
 
-        var adminRole = await SeedDefaultRolesAsync(editora.Id);
+        var adminRole = await _tenantSetupService.SeedDefaultRolesAsync(editora.Id);
 
         // 3. Create the global user identity
-        var usuario = new Usuario
-        {
-            Id = Guid.NewGuid(),
-            Email = email,
-            SenhaHash = senhaHash,
-            Nome = dto.NomeAdmin,
-            EmailConfirmado = false,
-            TokenConfirmacao = hashedConfirmationToken,
-            ExpiracaoToken = DateTime.UtcNow.AddHours(24)
-        };
+        var usuario = new Usuario(email, senhaHash, dto.NomeAdmin);
+        usuario.DefinirTokenConfirmacao(hashedConfirmationToken, DateTime.UtcNow.AddHours(24));
 
         // 4. Create the per-tenant binding
         var vinculo = new VinculoUsuarioEditora
@@ -156,11 +138,7 @@ public partial class AuthService : IAuthService
         _context.ConsentimentosLGPD.Add(consentimento);
         await _context.SaveChangesAsync();
 
-        var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
-        var verificationLink = $"{frontendUrl}/onboarding/verify-email" +
-                               $"?email={Uri.EscapeDataString(usuario.Email)}&token={confirmationToken}";
-
-        await _emailService.SendVerificationEmailAsync(usuario.Email, usuario.Nome, verificationLink);
+        await _notificationService.SendVerificationEmailAsync(usuario.Email, usuario.Nome, confirmationToken);
 
         return new RegisterEditoraResult(editora.Id);
     }
@@ -171,8 +149,7 @@ public partial class AuthService : IAuthService
         VinculoUsuarioEditora? vinculo = null;
         try
         {
-            usuario = await _context.Usuarios
-                .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
+            usuario = await _usuarioRepository.FindByEmailAsync(dto.Email);
 
             if (usuario is null)
                 throw new UnauthorizedAccessException("Credenciais inválidas.");
@@ -191,22 +168,16 @@ public partial class AuthService : IAuthService
             vinculo = vinculos.FirstOrDefault();
 
             // 2. Check if the account is currently locked
-            if (usuario.BloqueioAte.HasValue && usuario.BloqueioAte.Value > DateTime.UtcNow)
+            if (usuario.EstaBloqueado())
             {
-                var remainingTime = Math.Ceiling((usuario.BloqueioAte.Value - DateTime.UtcNow).TotalMinutes);
+                var remainingTime = Math.Ceiling((usuario.BloqueioAte!.Value - DateTime.UtcNow).TotalMinutes);
                 throw new UnauthorizedAccessException($"Esta conta está temporariamente bloqueada por múltiplas tentativas falhas. Tente novamente em {remainingTime} minuto(s).");
             }
 
             // 3. Verify password
             if (!BCrypt.Net.BCrypt.Verify(dto.Senha, usuario.SenhaHash))
             {
-                usuario.AcessosFalhos++;
-
-                if (usuario.AcessosFalhos >= 5)
-                {
-                    usuario.BloqueioAte = DateTime.UtcNow.AddMinutes(15);
-                    usuario.AcessosFalhos = 0;
-                }
+                usuario.RegistrarAcessoFalho();
 
                 await _context.SaveChangesAsync();
                 throw new UnauthorizedAccessException("Credenciais inválidas.");
@@ -217,12 +188,7 @@ public partial class AuthService : IAuthService
                 throw new UnauthorizedAccessException("Usuário sem vínculo ativo com uma editora.");
 
             // 5. Reset lockout state on successful credential validation
-            if (usuario.AcessosFalhos > 0 || usuario.BloqueioAte.HasValue)
-            {
-                usuario.AcessosFalhos = 0;
-                usuario.BloqueioAte = null;
-                await _context.SaveChangesAsync();
-            }
+            if (usuario.AcessosFalhos > 0 || usuario.BloqueioAte.HasValue) usuario.ResetarBloqueio();
 
             var contextos = vinculos
                 .Select(v => new ContextoDisponivel(
@@ -231,6 +197,9 @@ public partial class AuthService : IAuthService
                     v.Editora?.Nome ?? "",
                     v.Roles.Select(r => r.Nome).ToList()))
                 .ToList();
+
+            if (_context.ChangeTracker.HasChanges())
+                await _context.SaveChangesAsync();
 
             return new LoginResult(usuario.Id, usuario.Nome, usuario.Email, contextos);
         }
@@ -251,8 +220,7 @@ public partial class AuthService : IAuthService
         if (vinculo is null)
             throw new UnauthorizedAccessException("Vínculo com a editora não encontrado ou inativo.");
 
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.Id == dto.UsuarioId);
+        var usuario = await _usuarioRepository.FindByIdAsync(dto.UsuarioId);
 
         if (usuario is null)
             throw new UnauthorizedAccessException("Usuário não encontrado.");
@@ -277,8 +245,7 @@ public partial class AuthService : IAuthService
 
     public async Task VerifyEmailAsync(VerifyEmailDto dto)
     {
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLower());
+        var usuario = await _usuarioRepository.FindByEmailAsync(dto.Email);
 
         if (usuario is null || usuario.TokenConfirmacao != HashToken(dto.Token))
             throw new InvalidOperationException("Token de verificação inválido.");
@@ -289,65 +256,44 @@ public partial class AuthService : IAuthService
         if (usuario.EmailConfirmado)
             throw new InvalidOperationException("E-mail já confirmado.");
 
-        usuario.EmailConfirmado = true;
-        usuario.TokenConfirmacao = null;
-        usuario.ExpiracaoToken = null;
+        usuario.ConfirmarEmail();
 
         await _context.SaveChangesAsync();
     }
 
     public async Task ResendVerificationEmailAsync(string email)
     {
-        var normalizedEmail = email.Trim().ToLower();
-
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.Email == normalizedEmail);
+        var usuario = await _usuarioRepository.FindByEmailAsync(email);
 
         if (usuario is null || usuario.EmailConfirmado)
             return;
 
         var newToken = GenerateSecureToken();
-        usuario.TokenConfirmacao = HashToken(newToken);
-        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+        usuario.DefinirTokenConfirmacao(HashToken(newToken), DateTime.UtcNow.AddHours(24));
 
         await _context.SaveChangesAsync();
 
-        var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
-        var verificationLink = $"{frontendUrl}/onboarding/verify-email" +
-                               $"?email={Uri.EscapeDataString(usuario.Email)}&token={newToken}";
-
-        await _emailService.SendVerificationEmailAsync(usuario.Email, usuario.Nome, verificationLink);
+        await _notificationService.SendVerificationEmailAsync(usuario.Email, usuario.Nome, newToken);
     }
 
     public async Task ForgotPasswordAsync(ForgotPasswordDto dto)
     {
-        var email = dto.Email.Trim().ToLower();
-
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.Email == email);
+        var usuario = await _usuarioRepository.FindByEmailAsync(dto.Email);
 
         if (usuario is null || !usuario.EmailConfirmado)
             return;
 
         var resetToken = GenerateSecureToken();
-        usuario.TokenRedefinicaoSenha = HashToken(resetToken);
-        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        usuario.DefinirTokenRedefinicaoSenha(HashToken(resetToken), DateTime.UtcNow.AddHours(1));
 
         await _context.SaveChangesAsync();
 
-        var frontendUrl = _configuration["FrontendUrl"] ?? "http://localhost:4200";
-        var resetLink = $"{frontendUrl}/redefinir-senha" +
-                        $"?email={Uri.EscapeDataString(usuario.Email)}&token={resetToken}";
-
-        await _emailService.SendPasswordResetEmailAsync(usuario.Email, usuario.Nome, resetLink);
+        await _notificationService.SendPasswordResetEmailAsync(usuario.Email, usuario.Nome, resetToken);
     }
 
     public async Task ResetPasswordAsync(ResetPasswordDto dto)
     {
-        var email = dto.Email.Trim().ToLower();
-
-        var usuario = await _context.Usuarios
-            .FirstOrDefaultAsync(u => u.Email == email);
+        var usuario = await _usuarioRepository.FindByEmailAsync(dto.Email);
 
         if (usuario is null)
             throw new InvalidOperationException("Link de redefinição inválido.");
@@ -361,10 +307,7 @@ public partial class AuthService : IAuthService
         if (usuario.ExpiracaoTokenRedefinicaoSenha < DateTime.UtcNow)
             throw new InvalidOperationException("Link de redefinição expirado. Solicite um novo.");
 
-        usuario.SenhaHash = BCrypt.Net.BCrypt.HashPassword(dto.NovaSenha);
-        usuario.SenhaAlteradaEm = DateTime.UtcNow;
-        usuario.TokenRedefinicaoSenha = null;
-        usuario.ExpiracaoTokenRedefinicaoSenha = null;
+        usuario.RedefinirSenha(BCrypt.Net.BCrypt.HashPassword(dto.NovaSenha));
 
         await _context.SaveChangesAsync();
 
@@ -393,7 +336,7 @@ public partial class AuthService : IAuthService
                 UsuarioId = vinculo?.Id ?? usuario?.Id,
                 Acao = acao,
                 Recurso = "Auth",
-                RecursoId = usuario?.Email ?? emailTentativa ?? "",
+                RecursoId = usuario?.Email?.Value ?? emailTentativa ?? "",
                 IP = _userContextProvider.GetIp() ?? "",
                 UserAgent = _userContextProvider.GetUserAgent() ?? "",
                 DataHora = DateTime.UtcNow
@@ -406,72 +349,6 @@ public partial class AuthService : IAuthService
         {
             // Best-effort: auth audit logging must not block auth operations.
         }
-    }
-
-    /// <summary>
-    /// Creates the three default Roles for a new Editora and ensures all global
-    /// system Permission records exist (upsert by Codigo). Returns the AdminEditora role.
-    /// </summary>
-    private async Task<Role> SeedDefaultRolesAsync(Guid editoraId)
-    {
-        var allCodes = SystemPermissions.All.Select(d => d.Codigo).ToList();
-
-        var existing = await _context.Permissions
-            .Where(p => allCodes.Contains(p.Codigo))
-            .ToDictionaryAsync(p => p.Codigo);
-
-        var permissionMap = new Dictionary<string, Permission>(SystemPermissions.All.Count);
-        foreach (var def in SystemPermissions.All)
-        {
-            if (!existing.TryGetValue(def.Codigo, out var perm))
-            {
-                perm = new Permission
-                {
-                    Id = Guid.NewGuid(),
-                    Codigo = def.Codigo,
-                    Nome = def.Nome,
-                    Agrupamento = def.Agrupamento
-                };
-                _context.Permissions.Add(perm);
-            }
-            permissionMap[def.Codigo] = perm;
-        }
-
-        List<Permission> Resolve(string[] codes) =>
-            codes.Select(c => permissionMap[c]).ToList();
-
-        var adminRole = new Role
-        {
-            Id = Guid.NewGuid(),
-            EditoraId = editoraId,
-            Nome = "AdminEditora",
-            Descricao = "Acesso total ao sistema.",
-            Permissions = Resolve(SystemPermissions.AdminEditoraCodes)
-        };
-
-        var gestorRole = new Role
-        {
-            Id = Guid.NewGuid(),
-            EditoraId = editoraId,
-            Nome = "GestorEditorial",
-            Descricao = "Permissões de edição e visualização.",
-            Permissions = Resolve(SystemPermissions.GestorEditorialCodes)
-        };
-
-        var autorRole = new Role
-        {
-            Id = Guid.NewGuid(),
-            EditoraId = editoraId,
-            Nome = "Autor",
-            Descricao = "Permissões limitadas a submissão de conteúdo.",
-            Permissions = Resolve(SystemPermissions.AutorCodes)
-        };
-
-        _context.Roles.Add(adminRole);
-        _context.Roles.Add(gestorRole);
-        _context.Roles.Add(autorRole);
-
-        return adminRole;
     }
 
     private string GenerateJwt(Usuario usuario, VinculoUsuarioEditora vinculo, IReadOnlyList<string> permCodes)
@@ -524,33 +401,4 @@ public partial class AuthService : IAuthService
     {
         return Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     }
-
-    private static string GerarSlug(string nome)
-    {
-        var slug = nome.ToLowerInvariant().Trim();
-
-        slug = SlugRegexA().Replace(slug, "a");
-        slug = SlugRegexE().Replace(slug, "e");
-        slug = SlugRegexI().Replace(slug, "i");
-        slug = SlugRegexO().Replace(slug, "o");
-        slug = SlugRegexU().Replace(slug, "u");
-        slug = SlugRegexC().Replace(slug, "c");
-        slug = SlugRegexN().Replace(slug, "n");
-        slug = SlugRegexNonSlug().Replace(slug, "");
-        slug = SlugRegexSpaces().Replace(slug, "-");
-        slug = SlugRegexDashes().Replace(slug, "-").Trim('-');
-
-        return slug;
-    }
-
-    [GeneratedRegex(@"[àáâãäå]")] private static partial Regex SlugRegexA();
-    [GeneratedRegex(@"[èéêë]")]   private static partial Regex SlugRegexE();
-    [GeneratedRegex(@"[ìíîï]")]   private static partial Regex SlugRegexI();
-    [GeneratedRegex(@"[òóôõö]")]  private static partial Regex SlugRegexO();
-    [GeneratedRegex(@"[ùúûü]")]   private static partial Regex SlugRegexU();
-    [GeneratedRegex(@"[ç]")]      private static partial Regex SlugRegexC();
-    [GeneratedRegex(@"[ñ]")]      private static partial Regex SlugRegexN();
-    [GeneratedRegex(@"[^a-z0-9\s\-]")] private static partial Regex SlugRegexNonSlug();
-    [GeneratedRegex(@"\s+")]      private static partial Regex SlugRegexSpaces();
-    [GeneratedRegex(@"\-+")]      private static partial Regex SlugRegexDashes();
 }

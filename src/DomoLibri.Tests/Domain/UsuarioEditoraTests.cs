@@ -50,8 +50,8 @@ public class VinculoUsuarioEditoraTests
     [Fact]
     public void VinculoUsuarioEditora_NavigationProperties_CanBeSet()
     {
-        var editora = new Editora { Id = Guid.NewGuid(), Nome = "Editora" };
-        var usuario = new Usuario { Id = Guid.NewGuid(), Nome = "Teste", Email = "test@test.com" };
+        var editora = new Editora("Editora", "editora");
+        var usuario = new Usuario("test@test.com", "hash", "Teste");
 
         var vinculo = new VinculoUsuarioEditora
         {

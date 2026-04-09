@@ -1,5 +1,6 @@
 ﻿using DomoLibri.Domain.Entities;
 using DomoLibri.Domain.Enums;
+using DomoLibri.Domain.ValueObjects;
 using Microsoft.EntityFrameworkCore;
 
 namespace DomoLibri.Infrastructure.Data;
@@ -63,6 +64,10 @@ public class DomoLibriDbContext : DbContext
         {
             entity.HasKey(u => u.Id);
             entity.HasIndex(u => u.Email).IsUnique();
+            entity.Property(u => u.Email)
+                  .HasConversion(
+                      email => email.Value,
+                      value => new Email(value));
         });
 
         modelBuilder.Entity<VinculoUsuarioEditora>(entity =>

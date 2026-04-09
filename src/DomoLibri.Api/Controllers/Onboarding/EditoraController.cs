@@ -62,10 +62,13 @@ public class EditoraController : ControllerBase
             return NotFound(new { Message = "Editora não encontrada." });
 
         if (request.Logo is not null)
-            editora.LogoUrl = await _storageService.UploadLogoAsync(request.Logo, tenantId.Value);
+        {
+            var newLogoUrl = await _storageService.UploadLogoAsync(request.Logo, tenantId.Value);
+            editora.AtualizarBranding(newLogoUrl, editora.CorPrimaria);
+        }
 
         if (request.CorPrimaria is not null)
-            editora.CorPrimaria = request.CorPrimaria;
+            editora.AtualizarBranding(editora.LogoUrl, request.CorPrimaria);
 
         await _db.SaveChangesAsync();
 

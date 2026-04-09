@@ -17,6 +17,10 @@ public class S3StorageService : IStorageService
 {
     private readonly IAmazonS3 _s3Client;
     private readonly AwsSettings _settings;
+    // Guaranteed to run once per service lifetime, regardless of concurrent callers.
+    // If bucket creation fails the faulted Task is cached, surfacing the error on every
+    // subsequent upload — which is the desired fail-fast behaviour.
+    private readonly Lazy<Task> _bucketInitializer;
 
     public S3StorageService(IOptions<AwsSettings> awsOptions)
     {
@@ -31,11 +35,15 @@ public class S3StorageService : IStorageService
                 ForcePathStyle = true
             }
         );
+
+        _bucketInitializer = new Lazy<Task>(
+            () => EnsureBucketExistsAsync(_settings.BucketName),
+            LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     public async Task<string> UploadLogoAsync(IFormFile logoFile, Guid tenantId)
     {
-        await EnsureBucketExistsAsync(_settings.BucketName);
+        await _bucketInitializer.Value;
 
         var extension = Path.GetExtension(logoFile.FileName);
         var objectKey = $"{tenantId}/{Guid.NewGuid()}{extension}";

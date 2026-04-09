@@ -7,6 +7,7 @@ using DomoLibri.Domain.Entities;
 using DomoLibri.Domain.Enums;
 using DomoLibri.Domain.Interfaces;
 using DomoLibri.Infrastructure.Data;
+using DomoLibri.Infrastructure.Data.Repositories;
 using DomoLibri.Infrastructure.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -18,7 +19,7 @@ public class AuthServiceTests
 {
     #region Helpers
 
-    private static (DomoLibriDbContext db, Mock<IEmailService> emailMock, AuthService sut) CreateSut(
+    private static (DomoLibriDbContext db, Mock<INotificationService> notificationMock, AuthService sut) CreateSut(
         Dictionary<string, string?>? configOverrides = null,
         Mock<IUserContextProvider>? userContextMock = null)
     {
@@ -48,12 +49,12 @@ public class AuthServiceTests
             .AddInMemoryCollection(config)
             .Build();
 
-        var emailMock = new Mock<IEmailService>();
-        emailMock.Setup(e => e.SendEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        var notificationMock = new Mock<INotificationService>();
+        notificationMock.Setup(n => n.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
-        emailMock.Setup(e => e.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        notificationMock.Setup(n => n.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
-        emailMock.Setup(e => e.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
+        notificationMock.Setup(n => n.SendEditoraLinkedEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns(Task.CompletedTask);
 
         var ctxMock = userContextMock ?? new Mock<IUserContextProvider>();
@@ -64,21 +65,17 @@ public class AuthServiceTests
             ctxMock.Setup(x => x.GetUserAgent()).Returns((string?)null);
         }
 
-        var sut = new AuthService(db, configuration, emailMock.Object, ctxMock.Object);
-        return (db, emailMock, sut);
+        var editoraRepo = new EditoraRepository(db);
+        var usuarioRepo = new UsuarioRepository(db);
+        var tenantSetupService = new TenantSetupService(db, editoraRepo);
+        var sut = new AuthService(db, configuration, notificationMock.Object, tenantSetupService, ctxMock.Object, usuarioRepo, editoraRepo);
+        return (db, notificationMock, sut);
     }
 
     private static Editora CreateEditora(string nome = "Editora Teste")
     {
         var slug = nome.ToLowerInvariant().Replace(" ", "-");
-        return new Editora
-        {
-            Id = Guid.NewGuid(),
-            Nome = nome,
-            Slug = slug,
-            DataCriacao = DateTime.UtcNow,
-            Ativo = true
-        };
+        return new Editora(nome, slug);
     }
 
     private static (Usuario usuario, VinculoUsuarioEditora vinculo) CreateUser(
@@ -88,14 +85,13 @@ public class AuthServiceTests
         bool ativo = true,
         string email = "admin@teste.com")
     {
-        var usuario = new Usuario
+        var senhaHash = BCrypt.Net.BCrypt.HashPassword(senha);
+        var usuario = new Usuario(email, senhaHash, "Admin Teste");
+        if (emailConfirmado)
         {
-            Id = Guid.NewGuid(),
-            Email = email,
-            SenhaHash = BCrypt.Net.BCrypt.HashPassword(senha),
-            Nome = "Admin Teste",
-            EmailConfirmado = emailConfirmado
-        };
+            usuario.DefinirTokenConfirmacao("dummy_hash_for_test", DateTime.UtcNow.AddHours(1));
+            usuario.ConfirmarEmail();
+        }
         var vinculo = new VinculoUsuarioEditora
         {
             Id = Guid.NewGuid(),
@@ -167,7 +163,7 @@ public class AuthServiceTests
 
         var usuario = await db.Usuarios.IgnoreQueryFilters().FirstOrDefaultAsync();
         Assert.NotNull(usuario);
-        Assert.Equal("admin@teste.com", usuario.Email);
+        Assert.Equal("admin@teste.com", usuario.Email.Value);
         Assert.False(usuario.EmailConfirmado);
         Assert.NotNull(usuario.TokenConfirmacao);
         Assert.NotNull(usuario.ExpiracaoToken);
@@ -178,7 +174,7 @@ public class AuthServiceTests
         Assert.True(vinculo.Ativo);
 
         emailMock.Verify(
-            e => e.SendVerificationEmailAsync("admin@teste.com", "Admin", It.Is<string>(s => s.Contains("verify-email"))),
+            n => n.SendVerificationEmailAsync("admin@teste.com", "Admin", It.IsAny<string>()),
             Times.Once);
     }
 
@@ -221,10 +217,10 @@ public class AuthServiceTests
 
         // Notification email sent (no verification email — user already confirmed)
         emailMock.Verify(
-            e => e.SendEmailAsync("admin@teste.com", It.IsAny<string>(), It.IsAny<string>()),
+            n => n.SendEditoraLinkedEmailAsync("admin@teste.com", It.IsAny<string>(), It.IsAny<string>()),
             Times.Once);
         emailMock.Verify(
-            e => e.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            n => n.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
             Times.Never);
     }
 
@@ -238,7 +234,7 @@ public class AuthServiceTests
 
         var usuario = await db.Usuarios.IgnoreQueryFilters().FirstOrDefaultAsync();
         Assert.NotNull(usuario);
-        Assert.Equal("admin@teste.com", usuario.Email);
+        Assert.Equal("admin@teste.com", usuario.Email.Value);
     }
 
     #endregion
@@ -444,7 +440,7 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         var (usuario, vinculo) = CreateUser(editora.Id);
-        usuario.BloqueioAte = DateTime.UtcNow.AddMinutes(10);
+        usuario.RegistrarAcessoFalho(1, 10);
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -481,7 +477,7 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         var (usuario, vinculo) = CreateUser(editora.Id);
-        usuario.AcessosFalhos = 4;
+        for (int i = 0; i < 4; i++) usuario.RegistrarAcessoFalho();
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -502,7 +498,7 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         var (usuario, vinculo) = CreateUser(editora.Id, "Senha@123");
-        usuario.AcessosFalhos = 3;
+        for (int i = 0; i < 3; i++) usuario.RegistrarAcessoFalho();
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -570,7 +566,8 @@ public class AuthServiceTests
             .FirstAsync(v => v.EditoraId == registerResult.EditoraId);
         var usuario = await db.Usuarios.IgnoreQueryFilters()
             .FirstAsync(u => u.Id == vinculo.UsuarioId);
-        usuario.EmailConfirmado = true;
+        usuario.DefinirTokenConfirmacao("dummy", DateTime.UtcNow.AddHours(1));
+        usuario.ConfirmarEmail();
         await db.SaveChangesAsync();
 
         var loginResult = await sut.LoginAsync(new LoginDto("admin@jwt.com", "Senha@123"));
@@ -611,7 +608,8 @@ public class AuthServiceTests
 
         var adminUsuario = await db.Usuarios.IgnoreQueryFilters()
             .FirstAsync(u => u.Id == adminVinculo.UsuarioId);
-        adminUsuario.EmailConfirmado = true;
+        adminUsuario.DefinirTokenConfirmacao("dummy", DateTime.UtcNow.AddHours(1));
+        adminUsuario.ConfirmarEmail();
         await db.SaveChangesAsync();
 
         var loginResult = await sut.LoginAsync(new LoginDto("admin@dedup.com", "Senha@123"));
@@ -658,8 +656,7 @@ public class AuthServiceTests
         var editora = CreateEditora();
         const string plainToken = "my_test_token_12345";
         var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
-        usuario.TokenConfirmacao = HashToken(plainToken);
-        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+        usuario.DefinirTokenConfirmacao(HashToken(plainToken), DateTime.UtcNow.AddHours(24));
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -689,8 +686,7 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
-        usuario.TokenConfirmacao = HashToken("correct_token");
-        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+        usuario.DefinirTokenConfirmacao(HashToken("correct_token"), DateTime.UtcNow.AddHours(24));
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -708,8 +704,7 @@ public class AuthServiceTests
         var editora = CreateEditora();
         const string plainToken = "expired_token_xyz";
         var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
-        usuario.TokenConfirmacao = HashToken(plainToken);
-        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(-1); // expired
+        usuario.DefinirTokenConfirmacao(HashToken(plainToken), DateTime.UtcNow.AddHours(-1)); // expired
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -727,8 +722,7 @@ public class AuthServiceTests
         var editora = CreateEditora();
         const string plainToken = "valid_token_abc";
         var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: true);
-        usuario.TokenConfirmacao = HashToken(plainToken);
-        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(24);
+        usuario.DefinirTokenConfirmacao(HashToken(plainToken), DateTime.UtcNow.AddHours(24));
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -749,8 +743,7 @@ public class AuthServiceTests
         var (db, emailMock, sut) = CreateSut();
         var editora = CreateEditora();
         var (usuario, vinculo) = CreateUser(editora.Id, emailConfirmado: false);
-        usuario.TokenConfirmacao = HashToken("old_token");
-        usuario.ExpiracaoToken = DateTime.UtcNow.AddHours(1);
+        usuario.DefinirTokenConfirmacao(HashToken("old_token"), DateTime.UtcNow.AddHours(1));
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -764,7 +757,7 @@ public class AuthServiceTests
         Assert.True(updated.ExpiracaoToken > DateTime.UtcNow.AddHours(23));
 
         emailMock.Verify(
-            e => e.SendVerificationEmailAsync(usuario.Email, usuario.Nome, It.Is<string>(s => s.Contains("verify-email"))),
+            n => n.SendVerificationEmailAsync(usuario.Email.Value, usuario.Nome, It.IsAny<string>()),
             Times.Once);
     }
 
@@ -777,7 +770,7 @@ public class AuthServiceTests
         await sut.ResendVerificationEmailAsync("notexist@test.com");
 
         emailMock.Verify(
-            e => e.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            n => n.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
             Times.Never);
     }
 
@@ -795,7 +788,7 @@ public class AuthServiceTests
         await sut.ResendVerificationEmailAsync(usuario.Email);
 
         emailMock.Verify(
-            e => e.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            n => n.SendVerificationEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
             Times.Never);
     }
 
@@ -822,7 +815,7 @@ public class AuthServiceTests
         Assert.True(updated.ExpiracaoTokenRedefinicaoSenha > DateTime.UtcNow.AddMinutes(59));
 
         emailMock.Verify(
-            e => e.SendPasswordResetEmailAsync(usuario.Email, usuario.Nome, It.Is<string>(s => s.Contains("redefinir-senha"))),
+            n => n.SendPasswordResetEmailAsync(usuario.Email.Value, usuario.Nome, It.IsAny<string>()),
             Times.Once);
     }
 
@@ -834,7 +827,7 @@ public class AuthServiceTests
         await sut.ForgotPasswordAsync(new ForgotPasswordDto("notexist@test.com"));
 
         emailMock.Verify(
-            e => e.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            n => n.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
             Times.Never);
     }
 
@@ -853,7 +846,7 @@ public class AuthServiceTests
 
         // ForgotPasswordAsync only checks !EmailConfirmado — an inactive binding is irrelevant
         emailMock.Verify(
-            e => e.SendPasswordResetEmailAsync(usuario.Email, usuario.Nome, It.IsAny<string>()),
+            n => n.SendPasswordResetEmailAsync(usuario.Email.Value, usuario.Nome, It.IsAny<string>()),
             Times.Once);
     }
 
@@ -871,7 +864,7 @@ public class AuthServiceTests
         await sut.ForgotPasswordAsync(new ForgotPasswordDto(usuario.Email));
 
         emailMock.Verify(
-            e => e.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
+            n => n.SendPasswordResetEmailAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()),
             Times.Never);
     }
 
@@ -886,8 +879,7 @@ public class AuthServiceTests
         var editora = CreateEditora();
         const string resetToken = "valid_reset_token_xyz";
         var (usuario, vinculo) = CreateUser(editora.Id);
-        usuario.TokenRedefinicaoSenha = HashToken(resetToken);
-        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        usuario.DefinirTokenRedefinicaoSenha(HashToken(resetToken), DateTime.UtcNow.AddHours(1));
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -917,8 +909,7 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut();
         var editora = CreateEditora();
         var (usuario, vinculo) = CreateUser(editora.Id);
-        usuario.TokenRedefinicaoSenha = HashToken("correct_reset_token");
-        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        usuario.DefinirTokenRedefinicaoSenha(HashToken("correct_reset_token"), DateTime.UtcNow.AddHours(1));
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -936,8 +927,7 @@ public class AuthServiceTests
         var editora = CreateEditora();
         const string resetToken = "expired_reset_token";
         var (usuario, vinculo) = CreateUser(editora.Id);
-        usuario.TokenRedefinicaoSenha = HashToken(resetToken);
-        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(-1); // expired
+        usuario.DefinirTokenRedefinicaoSenha(HashToken(resetToken), DateTime.UtcNow.AddHours(-1)); // expired
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -982,7 +972,7 @@ public class AuthServiceTests
 
         Assert.NotNull(log);
         Assert.Equal("Auth", log.Recurso);
-        Assert.Equal(usuario.Email, log.RecursoId);
+        Assert.Equal(usuario.Email.Value, log.RecursoId);
         Assert.Equal(vinculo.EditoraId, log.EditoraId);
         Assert.Equal(vinculo.Id, log.UsuarioId);
         Assert.Equal("10.0.0.1", log.IP);
@@ -1009,7 +999,7 @@ public class AuthServiceTests
 
         Assert.NotNull(log);
         Assert.Equal("Auth", log.Recurso);
-        Assert.Equal(usuario.Email, log.RecursoId);
+        Assert.Equal(usuario.Email.Value, log.RecursoId);
         Assert.Equal(vinculo.EditoraId, log.EditoraId);
         Assert.Equal("10.0.0.2", log.IP);
     }
@@ -1021,7 +1011,7 @@ public class AuthServiceTests
         var (db, _, sut) = CreateSut(userContextMock: ctxMock);
         var editora = CreateEditora();
         var (usuario, vinculo) = CreateUser(editora.Id);
-        usuario.BloqueioAte = DateTime.UtcNow.AddMinutes(10);
+        usuario.RegistrarAcessoFalho(1, 10);
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -1068,8 +1058,7 @@ public class AuthServiceTests
         var editora = CreateEditora();
         const string resetToken = "audit_reset_token_xyz";
         var (usuario, vinculo) = CreateUser(editora.Id);
-        usuario.TokenRedefinicaoSenha = HashToken(resetToken);
-        usuario.ExpiracaoTokenRedefinicaoSenha = DateTime.UtcNow.AddHours(1);
+        usuario.DefinirTokenRedefinicaoSenha(HashToken(resetToken), DateTime.UtcNow.AddHours(1));
         db.Editoras.Add(editora);
         db.Usuarios.Add(usuario);
         db.VinculosUsuarioEditora.Add(vinculo);
@@ -1082,7 +1071,7 @@ public class AuthServiceTests
 
         Assert.NotNull(log);
         Assert.Equal("Auth", log.Recurso);
-        Assert.Equal(usuario.Email, log.RecursoId);
+        Assert.Equal(usuario.Email.Value, log.RecursoId);
         Assert.Equal(vinculo.EditoraId, log.EditoraId);
         Assert.Equal(vinculo.Id, log.UsuarioId);
         Assert.Equal("10.0.0.5", log.IP);

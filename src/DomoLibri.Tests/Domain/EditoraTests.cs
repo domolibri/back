@@ -5,76 +5,74 @@ namespace DomoLibri.Tests.Domain;
 public class EditoraTests
 {
     [Fact]
-    public void Editora_DefaultValues_AreCorrect()
+    public void Editora_Constructor_SetsPropertiesCorrectly()
     {
-        var editora = new Editora();
+        var editora = new Editora("Editora Teste", "editora-teste");
 
-        Assert.Equal(Guid.Empty, editora.Id);
-        Assert.Equal(string.Empty, editora.Nome);
-        Assert.Equal(string.Empty, editora.Slug);
+        Assert.NotEqual(Guid.Empty, editora.Id);
+        Assert.Equal("Editora Teste", editora.Nome);
+        Assert.Equal("editora-teste", editora.Slug);
         Assert.Null(editora.LogoUrl);
         Assert.Null(editora.CorPrimaria);
-        Assert.Equal(default, editora.DataCriacao);
-        Assert.False(editora.Ativo);
+        Assert.True(editora.DataCriacao <= DateTime.UtcNow);
+        Assert.True(editora.DataCriacao > DateTime.UtcNow.AddSeconds(-5));
+        Assert.True(editora.Ativo);
         Assert.NotNull(editora.Usuarios);
         Assert.Empty(editora.Usuarios);
     }
 
     [Fact]
-    public void Editora_PropertiesCanBeSet()
+    public void Editora_Constructor_ThrowsOnEmptyNome()
     {
-        var id = Guid.NewGuid();
-        var now = DateTime.UtcNow;
+        Assert.Throws<ArgumentException>(() => new Editora("", "slug"));
+    }
 
-        var editora = new Editora
-        {
-            Id = id,
-            Nome = "Editora Teste",
-            Slug = "editora-teste",
-            LogoUrl = "https://storage.example.com/logo.png",
-            CorPrimaria = "#0078D4",
-            DataCriacao = now,
-            Ativo = true
-        };
+    [Fact]
+    public void Editora_Constructor_ThrowsOnEmptySlug()
+    {
+        Assert.Throws<ArgumentException>(() => new Editora("Nome", ""));
+    }
 
-        Assert.Equal(id, editora.Id);
-        Assert.Equal("Editora Teste", editora.Nome);
-        Assert.Equal("editora-teste", editora.Slug);
-        Assert.Equal("https://storage.example.com/logo.png", editora.LogoUrl);
-        Assert.Equal("#0078D4", editora.CorPrimaria);
-        Assert.Equal(now, editora.DataCriacao);
+    [Fact]
+    public void Editora_AtualizarBranding_UpdatesBranding()
+    {
+        var editora = new Editora("Editora", "editora");
+        editora.AtualizarBranding("https://logo.url", "#FF0000");
+        Assert.Equal("https://logo.url", editora.LogoUrl);
+        Assert.Equal("#FF0000", editora.CorPrimaria);
+    }
+
+    [Fact]
+    public void Editora_AtualizarBranding_SetsNullValues()
+    {
+        var editora = new Editora("Editora", "editora");
+        editora.AtualizarBranding(null, null);
+        Assert.Null(editora.LogoUrl);
+        Assert.Null(editora.CorPrimaria);
+    }
+
+    [Fact]
+    public void Editora_Desativar_SetsAtivoFalse()
+    {
+        var editora = new Editora("Editora", "editora");
+        editora.Desativar();
+        Assert.False(editora.Ativo);
+    }
+
+    [Fact]
+    public void Editora_Ativar_SetsAtivoTrue()
+    {
+        var editora = new Editora("Editora", "editora");
+        editora.Desativar();
+        editora.Ativar();
         Assert.True(editora.Ativo);
     }
 
     [Fact]
-    public void Editora_Usuarios_CanAddItems()
+    public void Editora_Usuarios_IsInitiallyEmpty()
     {
-        var editoraId = Guid.NewGuid();
-        var editora = new Editora { Id = editoraId };
-        var usuario = new VinculoUsuarioEditora
-        {
-            Id = Guid.NewGuid(),
-            EditoraId = editoraId,
-            UsuarioId = Guid.NewGuid()
-        };
-
-        editora.Usuarios.Add(usuario);
-
-        Assert.Single(editora.Usuarios);
-        Assert.Contains(usuario, editora.Usuarios);
-    }
-
-    [Fact]
-    public void Editora_LogoUrl_CanBeNull()
-    {
-        var editora = new Editora { LogoUrl = null };
-        Assert.Null(editora.LogoUrl);
-    }
-
-    [Fact]
-    public void Editora_CorPrimaria_CanBeNull()
-    {
-        var editora = new Editora { CorPrimaria = null };
-        Assert.Null(editora.CorPrimaria);
+        var editora = new Editora("Editora", "editora");
+        Assert.NotNull(editora.Usuarios);
+        Assert.Empty(editora.Usuarios);
     }
 }

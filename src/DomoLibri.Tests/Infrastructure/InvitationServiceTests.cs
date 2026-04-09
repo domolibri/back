@@ -58,30 +58,14 @@ public class InvitationServiceTests
 
     /// <summary>Seeds an Editora + VinculoUsuarioEditora into the DB and returns their IDs.</summary>
     private static async Task<(Editora editora, VinculoUsuarioEditora inviter, Role role)> SeedTenantAsync(
-        DomoLibriDbContext db, Guid tenantId, Guid inviterId)
+        DomoLibriDbContext db, Editora editora, Guid inviterId)
     {
-        var editora = new Editora
-        {
-            Id = tenantId,
-            Nome = "Editora Teste",
-            Slug = "editora-teste",
-            DataCriacao = DateTime.UtcNow,
-            Ativo = true
-        };
-
-        var inviterUsuario = new Usuario
-        {
-            Id = Guid.NewGuid(),
-            Email = "admin@editora.com",
-            SenhaHash = "hash",
-            Nome = "Admin Editora",
-            EmailConfirmado = true
-        };
+        var inviterUsuario = new Usuario("admin@editora.com", "hash", "Admin Editora");
 
         var inviter = new VinculoUsuarioEditora
         {
             Id = inviterId,
-            EditoraId = tenantId,
+            EditoraId = editora.Id,
             UsuarioId = inviterUsuario.Id,
             Ativo = true,
             DataEntrada = DateTime.UtcNow
@@ -90,7 +74,7 @@ public class InvitationServiceTests
         var role = new Role
         {
             Id = Guid.NewGuid(),
-            EditoraId = tenantId,
+            EditoraId = editora.Id,
             Nome = "Autor"
         };
 
@@ -110,8 +94,9 @@ public class InvitationServiceTests
     [Fact]
     public async Task InviteUser_ValidRequest_PersistsConviteAndSendsEmail()
     {
-        var ctx = CreateSut();
-        var (_, _, role) = await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
+        var editora = new Editora("Editora Teste", "editora-teste");
+        var ctx = CreateSut(editora.Id);
+        var (_, _, role) = await SeedTenantAsync(ctx.Db, editora, ctx.InviterId);
 
         var result = await ctx.Sut.InviteUserAsync(new InviteUserDto("novo@editora.com", role.Id));
 
@@ -140,8 +125,9 @@ public class InvitationServiceTests
     [Fact]
     public async Task InviteUser_ValidRequest_CreatesAuditLog()
     {
-        var ctx = CreateSut();
-        var (_, _, role) = await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
+        var editora = new Editora("Editora Teste", "editora-teste");
+        var ctx = CreateSut(editora.Id);
+        var (_, _, role) = await SeedTenantAsync(ctx.Db, editora, ctx.InviterId);
 
         var result = await ctx.Sut.InviteUserAsync(new InviteUserDto("auditado@editora.com", role.Id));
 
@@ -162,8 +148,9 @@ public class InvitationServiceTests
     [Fact]
     public async Task InviteUser_EmailAlreadyUser_ThrowsInvalidOperation()
     {
-        var ctx = CreateSut();
-        var (_, _, role) = await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
+        var editora = new Editora("Editora Teste", "editora-teste");
+        var ctx = CreateSut(editora.Id);
+        var (_, _, role) = await SeedTenantAsync(ctx.Db, editora, ctx.InviterId);
 
         // Try to invite the inviter's own e-mail (already a user)
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -175,8 +162,9 @@ public class InvitationServiceTests
     [Fact]
     public async Task InviteUser_PendingInviteExists_ThrowsInvalidOperation()
     {
-        var ctx = CreateSut();
-        var (_, _, role) = await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
+        var editora = new Editora("Editora Teste", "editora-teste");
+        var ctx = CreateSut(editora.Id);
+        var (_, _, role) = await SeedTenantAsync(ctx.Db, editora, ctx.InviterId);
 
         // Seed a pre-existing pending invite for the same e-mail
         ctx.Db.Convites.Add(new ConviteUsuario
@@ -202,8 +190,9 @@ public class InvitationServiceTests
     [Fact]
     public async Task InviteUser_RoleNotFound_ThrowsInvalidOperation()
     {
-        var ctx = CreateSut();
-        await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
+        var editora = new Editora("Editora Teste", "editora-teste");
+        var ctx = CreateSut(editora.Id);
+        await SeedTenantAsync(ctx.Db, editora, ctx.InviterId);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             ctx.Sut.InviteUserAsync(new InviteUserDto("novo@editora.com", Guid.NewGuid())));
@@ -216,8 +205,9 @@ public class InvitationServiceTests
     [Fact]
     public async Task InviteUser_EmailBody_ContainsCorrectLinkAndToken()
     {
-        var ctx = CreateSut();
-        var (_, _, role) = await SeedTenantAsync(ctx.Db, ctx.TenantId, ctx.InviterId);
+        var editora = new Editora("Editora Teste", "editora-teste");
+        var ctx = CreateSut(editora.Id);
+        var (_, _, role) = await SeedTenantAsync(ctx.Db, editora, ctx.InviterId);
 
         string? capturedTo = null;
         string? capturedBody = null;
@@ -256,8 +246,10 @@ public class InvitationServiceTests
     [Fact]
     public async Task InviteUser_TenantIsolation_TenantACannotSeeOrConflictWithTenantBInvites()
     {
-        var tenantA = Guid.NewGuid();
-        var tenantB = Guid.NewGuid();
+        var editoraA = new Editora("Editora A", "editora-a");
+        var editoraB = new Editora("Editora B", "editora-b");
+        var tenantA = editoraA.Id;
+        var tenantB = editoraB.Id;
         var inviterA = Guid.NewGuid();
         var inviterB = Guid.NewGuid();
 
@@ -274,14 +266,14 @@ public class InvitationServiceTests
         var roleA = new Role { Id = Guid.NewGuid(), EditoraId = tenantA, Nome = "Autor" };
         var roleB = new Role { Id = Guid.NewGuid(), EditoraId = tenantB, Nome = "Editor" };
 
-        dbA.Editoras.Add(new Editora { Id = tenantA, Nome = "Editora A", Slug = "editora-a", DataCriacao = DateTime.UtcNow, Ativo = true });
-        var inviterAUsuario = new Usuario { Id = Guid.NewGuid(), Email = "admin@a.com", SenhaHash = "h", Nome = "Admin A", EmailConfirmado = true };
+        dbA.Editoras.Add(editoraA);
+        var inviterAUsuario = new Usuario("admin@a.com", "h", "Admin A");
         dbA.Usuarios.Add(inviterAUsuario);
         dbA.VinculosUsuarioEditora.Add(new VinculoUsuarioEditora { Id = inviterA, EditoraId = tenantA, UsuarioId = inviterAUsuario.Id, Ativo = true, DataEntrada = DateTime.UtcNow });
         dbA.Roles.Add(roleA);
 
-        dbB.Editoras.Add(new Editora { Id = tenantB, Nome = "Editora B", Slug = "editora-b", DataCriacao = DateTime.UtcNow, Ativo = true });
-        var inviterBUsuario = new Usuario { Id = Guid.NewGuid(), Email = "admin@b.com", SenhaHash = "h", Nome = "Admin B", EmailConfirmado = true };
+        dbB.Editoras.Add(editoraB);
+        var inviterBUsuario = new Usuario("admin@b.com", "h", "Admin B");
         dbB.Usuarios.Add(inviterBUsuario);
         dbB.VinculosUsuarioEditora.Add(new VinculoUsuarioEditora { Id = inviterB, EditoraId = tenantB, UsuarioId = inviterBUsuario.Id, Ativo = true, DataEntrada = DateTime.UtcNow });
         dbB.Roles.Add(roleB);

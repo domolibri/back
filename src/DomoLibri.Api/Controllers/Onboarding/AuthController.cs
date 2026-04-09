@@ -1,7 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using DomoLibri.Api;
 using DomoLibri.Application.Services;
-using DomoLibri.Infrastructure.Data;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 
@@ -81,12 +80,12 @@ public record SelectContextRequest(
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _authService;
-    private readonly DomoLibriDbContext _db;
+    private readonly IEditoraQueryService _editoraQueryService;
 
-    public AuthController(IAuthService authService, DomoLibriDbContext db)
+    public AuthController(IAuthService authService, IEditoraQueryService editoraQueryService)
     {
         _authService = authService;
-        _db = db;
+        _editoraQueryService = editoraQueryService;
     }
 
     /// <summary>
@@ -290,13 +289,13 @@ public class AuthController : ControllerBase
         string? corPrimaria = null;
         if (Guid.TryParse(tenantId, out var editoraId))
         {
-            var editora = await _db.Editoras.FindAsync(editoraId);
-            if (editora is not null)
+            var branding = await _editoraQueryService.GetBrandingAsync(editoraId);
+            if (branding is not null)
             {
-                nomeEditora = editora.Nome;
-                logoUrl = editora.LogoUrl;
-                corPrimaria = editora.CorPrimaria;
-                brandingConfigurado = logoUrl is not null || corPrimaria is not null;
+                nomeEditora = branding.NomeEditora;
+                logoUrl = branding.LogoUrl;
+                corPrimaria = branding.CorPrimaria;
+                brandingConfigurado = branding.BrandingConfigurado;
             }
         }
 

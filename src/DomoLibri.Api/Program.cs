@@ -19,53 +19,73 @@ using System.Threading.RateLimiting;
 var builder = WebApplication.CreateBuilder(args);
 
 // ---------------------------------------------------------------------------
-// JWT Secret validation
-// Precedence: env var (Jwt__Secret) > User Secrets (dev) > appsettings.json
-// In production the secret MUST be injected via environment variable.
-// Example: export Jwt__Secret="your-strong-secret-min-32-chars"
+// JWT Secret — must come from an environment variable in production.
+//
+// Production : set  Jwt__Secret=<secret>  (double-underscore = section separator)
+//              The env var is read directly so the secret can never accidentally
+//              be satisfied by a value committed to appsettings.json.
+// Development: falls back to IConfiguration (user-secrets → appsettings.Development.json)
+//              dotnet user-secrets set "Jwt:Secret" "<segredo>"
 // ---------------------------------------------------------------------------
-var jwtSecret = builder.Configuration["Jwt:Secret"];
-var jwtSecretValid = !string.IsNullOrWhiteSpace(jwtSecret) && jwtSecret.Length >= 32;
+const int MinJwtSecretLength = 32;
 
-if (!jwtSecretValid)
+var jwtSecret = builder.Environment.IsProduction()
+    ? Environment.GetEnvironmentVariable("Jwt__Secret")   // explicit — bypasses appsettings
+    : builder.Configuration["Jwt:Secret"];                // user-secrets / appsettings.Dev
+
+if (string.IsNullOrWhiteSpace(jwtSecret))
 {
-    const string msg = "Jwt:Secret não está configurado ou tem menos de 32 caracteres. " +
-                       "Em produção, defina a variável de ambiente Jwt__Secret. " +
-                       "Em desenvolvimento, use: dotnet user-secrets set \"Jwt:Secret\" \"<segredo>\"";
+    var missingMsg =
+        "O segredo JWT (Jwt__Secret) não está configurado. " +
+        "Em produção, defina a variável de ambiente Jwt__Secret " +
+        $"com no mínimo {MinJwtSecretLength} caracteres. " +
+        "Em desenvolvimento, use: dotnet user-secrets set \"Jwt:Secret\" \"<segredo>\"";
 
     if (builder.Environment.IsProduction())
-        throw new InvalidOperationException(msg);
+        throw new InvalidOperationException(missingMsg);
 
     Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.Error.WriteLine($"[AVISO DE SEGURANÇA] {msg}");
+    Console.Error.WriteLine($"[AVISO DE SEGURANÇA] {missingMsg}");
+    Console.ResetColor();
+
+    jwtSecret = string.Empty;
+}
+else if (jwtSecret.Length < MinJwtSecretLength)
+{
+    var shortMsg =
+        $"O segredo JWT tem apenas {jwtSecret.Length} caracteres; " +
+        $"o mínimo exigido é {MinJwtSecretLength}. " +
+        "Em produção, injete um segredo forte via variável de ambiente Jwt__Secret.";
+
+    if (builder.Environment.IsProduction())
+        throw new InvalidOperationException(shortMsg);
+
+    Console.ForegroundColor = ConsoleColor.Yellow;
+    Console.Error.WriteLine($"[AVISO DE SEGURANÇA] {shortMsg}");
     Console.ResetColor();
 }
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// CORS Origins validation
-// Configure: AllowedOrigins=https://app.domolibri.com.br,https://www.domolibri.com.br
-// In production this MUST be set via environment variable (AllowedOrigins=...).
+// CORS Origins — mandatory in every environment; no silent fallback.
+//
+// Production : AllowedOrigins=https://app.domolibri.com.br,https://www.domolibri.com.br
+// Development: add to appsettings.Development.json or User Secrets:
+//              "AllowedOrigins": "http://localhost:4200"
+//
+// A missing or empty value is always a misconfiguration — the app refuses to start
+// so that an unsafe wildcard or empty policy can never slip through unnoticed.
 // ---------------------------------------------------------------------------
 var allowedOriginsRaw = builder.Configuration["AllowedOrigins"];
 var allowedOrigins = allowedOriginsRaw?
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
 if (allowedOrigins is null or { Length: 0 })
-{
-    const string msg = "AllowedOrigins não está configurado. " +
-                       "Em produção, defina a variável de ambiente AllowedOrigins com as origens permitidas separadas por vírgula. " +
-                       "Em desenvolvimento, adicione AllowedOrigins ao appsettings.Development.json ou User Secrets.";
-
-    if (builder.Environment.IsProduction())
-        throw new InvalidOperationException(msg);
-
-    Console.ForegroundColor = ConsoleColor.Yellow;
-    Console.Error.WriteLine($"[AVISO DE SEGURANÇA] {msg}");
-    Console.ResetColor();
-
-    allowedOrigins = ["http://localhost:4200"];
-}
+    throw new InvalidOperationException(
+        "AllowedOrigins não está configurado. " +
+        "Defina a variável de ambiente AllowedOrigins com as origens permitidas separadas por vírgula. " +
+        "Em desenvolvimento, adicione ao appsettings.Development.json: " +
+        "\"AllowedOrigins\": \"http://localhost:4200\"");
 // ---------------------------------------------------------------------------
 
 // 1. Configure CORS
@@ -155,6 +175,11 @@ builder.Services.Configure<EmailSettings>(builder.Configuration.GetSection("Smtp
 builder.Services.AddScoped<SmtpEmailService>();
 // IEmailService resolves to BackgroundEmailService, which enqueues jobs instead of sending inline.
 builder.Services.AddScoped<IEmailService, BackgroundEmailService>();
+builder.Services.AddScoped<INotificationService, NotificationService>();
+builder.Services.AddScoped<IEditoraRepository, DomoLibri.Infrastructure.Data.Repositories.EditoraRepository>();
+builder.Services.AddScoped<IUsuarioRepository, DomoLibri.Infrastructure.Data.Repositories.UsuarioRepository>();
+builder.Services.AddScoped<ITenantSetupService, TenantSetupService>();
+builder.Services.AddScoped<IEditoraQueryService, EditoraQueryService>();
 
 // Configure Hangfire with PostgreSQL storage (reuses the application database).
 builder.Services.AddHangfire(config => config
@@ -167,7 +192,7 @@ builder.Services.AddHangfireServer();
 
 // Configure JWT authentication
 var jwtSection = builder.Configuration.GetSection("Jwt");
-var secret = jwtSection["Secret"] ?? string.Empty;
+// jwtSecret was validated (and sourced from the env var in production) above.
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -180,7 +205,7 @@ builder.Services
             ValidateIssuerSigningKey = true,
             ValidIssuer = jwtSection["Issuer"],
             ValidAudience = jwtSection["Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secret))
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret))
         };
 
         // Custom logic to read token from Cookie if Authorization header is missing

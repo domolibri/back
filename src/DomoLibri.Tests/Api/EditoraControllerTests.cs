@@ -57,15 +57,11 @@ public class EditoraControllerTests
     [Fact]
     public async Task GetBranding_WithExistingBranding_ReturnsBrandingData()
     {
-        var tenantId = Guid.NewGuid();
-        var (controller, _, db) = CreateController(tenantId);
+        var editora = new Editora("E", "e");
+        editora.AtualizarBranding("https://storage.example.com/logo.png", "#FF5500");
+        var (controller, _, db) = CreateController(editora.Id);
 
-        db.Editoras.Add(new Editora
-        {
-            Id = tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true,
-            LogoUrl = "https://storage.example.com/logo.png",
-            CorPrimaria = "#FF5500"
-        });
+        db.Editoras.Add(editora);
         await db.SaveChangesAsync();
 
         var result = await controller.GetBranding();
@@ -82,10 +78,10 @@ public class EditoraControllerTests
     [Fact]
     public async Task GetBranding_WithNoBrandingConfigured_ReturnsNullFields()
     {
-        var tenantId = Guid.NewGuid();
-        var (controller, _, db) = CreateController(tenantId);
+        var editora = new Editora("E", "e");
+        var (controller, _, db) = CreateController(editora.Id);
 
-        db.Editoras.Add(new Editora { Id = tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true });
+        db.Editoras.Add(editora);
         await db.SaveChangesAsync();
 
         var result = await controller.GetBranding();
@@ -121,10 +117,10 @@ public class EditoraControllerTests
     [Fact]
     public async Task UpdateBranding_WithCorPrimaria_UpdatesColorAndReturns200()
     {
-        var tenantId = Guid.NewGuid();
-        var (controller, _, db) = CreateController(tenantId);
+        var editora = new Editora("E", "e");
+        var (controller, _, db) = CreateController(editora.Id);
 
-        db.Editoras.Add(new Editora { Id = tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true });
+        db.Editoras.Add(editora);
         await db.SaveChangesAsync();
 
         var result = await controller.UpdateBranding(new UpdateBrandingRequest("#FF0000", null));
@@ -132,24 +128,24 @@ public class EditoraControllerTests
         var ok = Assert.IsType<OkObjectResult>(result);
         Assert.Equal(200, ok.StatusCode);
 
-        var updated = await db.Editoras.FindAsync(tenantId);
+        var updated = await db.Editoras.FindAsync(editora.Id);
         Assert.Equal("#FF0000", updated!.CorPrimaria);
     }
 
     [Fact]
     public async Task UpdateBranding_WithLogo_UploadsAndReturnsUrl()
     {
-        var tenantId = Guid.NewGuid();
-        var (controller, storageMock, db) = CreateController(tenantId);
+        var editora = new Editora("E", "e");
+        var (controller, storageMock, db) = CreateController(editora.Id);
 
-        db.Editoras.Add(new Editora { Id = tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true });
+        db.Editoras.Add(editora);
         await db.SaveChangesAsync();
 
         var logoMock = new Mock<IFormFile>();
         logoMock.Setup(f => f.FileName).Returns("logo.png");
         logoMock.Setup(f => f.OpenReadStream()).Returns(new MemoryStream(new byte[] { 1, 2, 3 }));
 
-        storageMock.Setup(s => s.UploadLogoAsync(It.IsAny<IFormFile>(), tenantId))
+        storageMock.Setup(s => s.UploadLogoAsync(It.IsAny<IFormFile>(), editora.Id))
             .ReturnsAsync("https://storage.example.com/logo.png");
 
         var result = await controller.UpdateBranding(new UpdateBrandingRequest(null, logoMock.Object));
@@ -157,32 +153,32 @@ public class EditoraControllerTests
         var ok = Assert.IsType<OkObjectResult>(result);
         Assert.Equal(200, ok.StatusCode);
 
-        var updated = await db.Editoras.FindAsync(tenantId);
+        var updated = await db.Editoras.FindAsync(editora.Id);
         Assert.Equal("https://storage.example.com/logo.png", updated!.LogoUrl);
-        storageMock.Verify(s => s.UploadLogoAsync(It.IsAny<IFormFile>(), tenantId), Times.Once);
+        storageMock.Verify(s => s.UploadLogoAsync(It.IsAny<IFormFile>(), editora.Id), Times.Once);
     }
 
     [Fact]
     public async Task UpdateBranding_WithBothLogoAndColor_UpdatesBoth()
     {
-        var tenantId = Guid.NewGuid();
-        var (controller, storageMock, db) = CreateController(tenantId);
+        var editora = new Editora("E", "e");
+        var (controller, storageMock, db) = CreateController(editora.Id);
 
-        db.Editoras.Add(new Editora { Id = tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true });
+        db.Editoras.Add(editora);
         await db.SaveChangesAsync();
 
         var logoMock = new Mock<IFormFile>();
         logoMock.Setup(f => f.FileName).Returns("logo.png");
         logoMock.Setup(f => f.OpenReadStream()).Returns(new MemoryStream(new byte[] { 1 }));
 
-        storageMock.Setup(s => s.UploadLogoAsync(It.IsAny<IFormFile>(), tenantId))
+        storageMock.Setup(s => s.UploadLogoAsync(It.IsAny<IFormFile>(), editora.Id))
             .ReturnsAsync("https://storage.example.com/newlogo.png");
 
         var result = await controller.UpdateBranding(new UpdateBrandingRequest("#0000FF", logoMock.Object));
 
         Assert.IsType<OkObjectResult>(result);
 
-        var updated = await db.Editoras.FindAsync(tenantId);
+        var updated = await db.Editoras.FindAsync(editora.Id);
         Assert.Equal("https://storage.example.com/newlogo.png", updated!.LogoUrl);
         Assert.Equal("#0000FF", updated.CorPrimaria);
     }
@@ -190,22 +186,18 @@ public class EditoraControllerTests
     [Fact]
     public async Task UpdateBranding_NullLogoAndColor_DoesNotChangeExistingValues()
     {
-        var tenantId = Guid.NewGuid();
-        var (controller, storageMock, db) = CreateController(tenantId);
+        var editora = new Editora("E", "e");
+        editora.AtualizarBranding("https://existing.com/logo.png", "#123456");
+        var (controller, storageMock, db) = CreateController(editora.Id);
 
-        db.Editoras.Add(new Editora
-        {
-            Id = tenantId, Nome = "E", Slug = "e", DataCriacao = DateTime.UtcNow, Ativo = true,
-            LogoUrl = "https://existing.com/logo.png",
-            CorPrimaria = "#123456"
-        });
+        db.Editoras.Add(editora);
         await db.SaveChangesAsync();
 
         var result = await controller.UpdateBranding(new UpdateBrandingRequest(null, null));
 
         Assert.IsType<OkObjectResult>(result);
 
-        var updated = await db.Editoras.FindAsync(tenantId);
+        var updated = await db.Editoras.FindAsync(editora.Id);
         Assert.Equal("https://existing.com/logo.png", updated!.LogoUrl);
         Assert.Equal("#123456", updated.CorPrimaria);
         storageMock.Verify(s => s.UploadLogoAsync(It.IsAny<IFormFile>(), It.IsAny<Guid>()), Times.Never);

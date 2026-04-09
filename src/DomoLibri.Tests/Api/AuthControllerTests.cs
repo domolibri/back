@@ -1,40 +1,28 @@
 using System.Security.Claims;
 using DomoLibri.Api.Controllers.Onboarding;
 using DomoLibri.Application.Services;
-using DomoLibri.Domain.Interfaces;
-using DomoLibri.Infrastructure.Data;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using Moq;
 
 namespace DomoLibri.Tests.Api;
 
 public class AuthControllerTests
 {
-    private static DomoLibriDbContext CreateDbContext()
-    {
-        var tenantProvider = new Mock<ITenantProvider>();
-        tenantProvider.Setup(t => t.GetTenantId()).Returns((Guid?)null);
-
-        var options = new DbContextOptionsBuilder<DomoLibriDbContext>()
-            .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
-            .Options;
-
-        return new DomoLibriDbContext(options, tenantProvider.Object);
-    }
-
-    private static (AuthController controller, Mock<IAuthService> mockService) CreateController()
+    private static (AuthController controller, Mock<IAuthService> mockService, Mock<IEditoraQueryService> editoraQueryMock) CreateController()
     {
         var mockService = new Mock<IAuthService>();
-        var db = CreateDbContext();
-        var controller = new AuthController(mockService.Object, db);
+        var editoraQueryMock = new Mock<IEditoraQueryService>();
+        editoraQueryMock.Setup(s => s.GetBrandingAsync(It.IsAny<Guid>()))
+            .ReturnsAsync((EditoraBrandingResult?)null);
+
+        var controller = new AuthController(mockService.Object, editoraQueryMock.Object);
 
         var httpContext = new DefaultHttpContext();
         httpContext.Request.Path = "/api/auth/test";
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
 
-        return (controller, mockService);
+        return (controller, mockService, editoraQueryMock);
     }
 
     #region Register
@@ -42,7 +30,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Register_ValidRequest_Returns201Created()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         var editoraId = Guid.NewGuid();
         mockService.Setup(s => s.RegisterAsync(It.IsAny<RegisterEditoraDto>()))
             .ReturnsAsync(new RegisterEditoraResult(editoraId));
@@ -57,7 +45,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Register_DuplicateSlug_Returns409Conflict()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         mockService.Setup(s => s.RegisterAsync(It.IsAny<RegisterEditoraDto>()))
             .ThrowsAsync(new InvalidOperationException("Já existe uma editora com esse nome."));
 
@@ -71,7 +59,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Register_MapsRequestToDto()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         RegisterEditoraDto? capturedDto = null;
         mockService.Setup(s => s.RegisterAsync(It.IsAny<RegisterEditoraDto>()))
             .Callback<RegisterEditoraDto>(dto => capturedDto = dto)
@@ -93,7 +81,7 @@ public class AuthControllerTests
     [Fact]
     public async Task VerifyEmail_ValidToken_Returns200Ok()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         mockService.Setup(s => s.VerifyEmailAsync(It.IsAny<VerifyEmailDto>()))
             .Returns(Task.CompletedTask);
 
@@ -107,7 +95,7 @@ public class AuthControllerTests
     [Fact]
     public async Task VerifyEmail_InvalidToken_Returns400BadRequest()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         mockService.Setup(s => s.VerifyEmailAsync(It.IsAny<VerifyEmailDto>()))
             .ThrowsAsync(new InvalidOperationException("Token de verificação inválido."));
 
@@ -125,7 +113,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Login_ValidCredentials_Returns200WithContexts()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         var contextos = new List<ContextoDisponivel>
         {
             new(Guid.NewGuid(), Guid.NewGuid(), "Editora Teste", new List<string>())
@@ -143,7 +131,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Login_InvalidCredentials_Returns401Unauthorized()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         mockService.Setup(s => s.LoginAsync(It.IsAny<LoginDto>()))
             .ThrowsAsync(new UnauthorizedAccessException("Credenciais inválidas."));
 
@@ -157,7 +145,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Login_SetsHttpOnlyCookie()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         var contextos = new List<ContextoDisponivel>
         {
             new(Guid.NewGuid(), Guid.NewGuid(), "Editora Teste", new List<string>())
@@ -179,7 +167,7 @@ public class AuthControllerTests
     [Fact]
     public async Task ResendVerificationEmail_Always_Returns200()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         mockService.Setup(s => s.ResendVerificationEmailAsync(It.IsAny<string>()))
             .Returns(Task.CompletedTask);
 
@@ -193,7 +181,7 @@ public class AuthControllerTests
     [Fact]
     public async Task ResendVerificationEmail_PassesEmailToService()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         string? capturedEmail = null;
         mockService.Setup(s => s.ResendVerificationEmailAsync(It.IsAny<string>()))
             .Callback<string>(e => capturedEmail = e)
@@ -212,7 +200,7 @@ public class AuthControllerTests
     [Fact]
     public async Task ForgotPassword_Always_Returns200()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         mockService.Setup(s => s.ForgotPasswordAsync(It.IsAny<ForgotPasswordDto>()))
             .Returns(Task.CompletedTask);
 
@@ -230,7 +218,7 @@ public class AuthControllerTests
     [Fact]
     public async Task ResetPassword_ValidToken_Returns200()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         mockService.Setup(s => s.ResetPasswordAsync(It.IsAny<ResetPasswordDto>()))
             .Returns(Task.CompletedTask);
 
@@ -244,7 +232,7 @@ public class AuthControllerTests
     [Fact]
     public async Task ResetPassword_InvalidToken_Returns400()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         mockService.Setup(s => s.ResetPasswordAsync(It.IsAny<ResetPasswordDto>()))
             .ThrowsAsync(new InvalidOperationException("Link de redefinição inválido."));
 
@@ -258,7 +246,7 @@ public class AuthControllerTests
     [Fact]
     public async Task ResetPassword_MapsRequestToDto()
     {
-        var (controller, mockService) = CreateController();
+        var (controller, mockService, _) = CreateController();
         ResetPasswordDto? capturedDto = null;
         mockService.Setup(s => s.ResetPasswordAsync(It.IsAny<ResetPasswordDto>()))
             .Callback<ResetPasswordDto>(dto => capturedDto = dto)
@@ -280,7 +268,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Me_AuthenticatedUser_ReturnsUserInfo()
     {
-        var (controller, _) = CreateController();
+        var (controller, _, _) = CreateController();
         var tenantId = Guid.NewGuid().ToString();
 
         var claims = new List<Claim>
@@ -301,7 +289,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Me_WithEmailInAlternativeClaimType_ReturnsEmail()
     {
-        var (controller, _) = CreateController();
+        var (controller, _, _) = CreateController();
 
         var claims = new List<Claim>
         {
@@ -319,7 +307,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Me_ReturnsPermissionsAndRolesFromClaims()
     {
-        var (controller, _) = CreateController();
+        var (controller, _, _) = CreateController();
 
         var claims = new List<Claim>
         {
@@ -348,7 +336,7 @@ public class AuthControllerTests
     [Fact]
     public async Task Me_WhenNoClaims_ReturnsEmptyPermissionsAndRoles()
     {
-        var (controller, _) = CreateController();
+        var (controller, _, _) = CreateController();
         var identity = new ClaimsIdentity(new[] { new Claim("tenant_id", Guid.NewGuid().ToString()) }, "TestAuth");
         controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(identity);
 
@@ -368,31 +356,17 @@ public class AuthControllerTests
     [Fact]
     public async Task Me_WhenBrandingConfigured_ReturnsBrandingConfiguradoTrue()
     {
-        var (controller, _) = CreateController();
+        var (controller, _, editoraQueryMock) = CreateController();
         var editoraId = Guid.NewGuid();
 
-        // Seed an Editora with branding set
-        var db = CreateDbContext();
-        db.Editoras.Add(new DomoLibri.Domain.Entities.Editora
-        {
-            Id = editoraId,
-            Nome = "Editora Teste",
-            Slug = "editora-teste",
-            CorPrimaria = "#ff0000",
-            DataCriacao = DateTime.UtcNow,
-            Ativo = true
-        });
-        await db.SaveChangesAsync();
-
-        var controllerWithDb = new AuthController(new Mock<IAuthService>().Object, db);
-        var httpContext = new DefaultHttpContext();
-        controllerWithDb.ControllerContext = new ControllerContext { HttpContext = httpContext };
+        editoraQueryMock.Setup(s => s.GetBrandingAsync(editoraId))
+            .ReturnsAsync(new EditoraBrandingResult("Editora Teste", null, "#ff0000", true));
 
         var claims = new List<Claim> { new("tenant_id", editoraId.ToString()) };
-        controllerWithDb.ControllerContext.HttpContext.User =
+        controller.ControllerContext.HttpContext.User =
             new ClaimsPrincipal(new ClaimsIdentity(claims, "TestAuth"));
 
-        var result = await controllerWithDb.Me();
+        var result = await controller.Me();
 
         var ok = Assert.IsType<OkObjectResult>(result);
         var value = ok.Value!;
@@ -407,7 +381,7 @@ public class AuthControllerTests
     [Fact]
     public void Logout_Returns200AndClearsCookie()
     {
-        var (controller, _) = CreateController();
+        var (controller, _, _) = CreateController();
 
         var result = controller.Logout();
 

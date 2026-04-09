@@ -1,4 +1,5 @@
 using DomoLibri.Domain.Attributes;
+using DomoLibri.Domain.ValueObjects;
 
 namespace DomoLibri.Domain.Entities;
 
@@ -8,30 +9,79 @@ namespace DomoLibri.Domain.Entities;
 /// </summary>
 public class Usuario
 {
-    public Guid Id { get; set; }
+    protected Usuario() { }
 
-    public string Email { get; set; } = string.Empty;
+    public Usuario(string email, string senhaHash, string nome)
+    {
+        if (string.IsNullOrWhiteSpace(email)) throw new ArgumentException("E-mail é obrigatório.", nameof(email));
+        if (string.IsNullOrWhiteSpace(senhaHash)) throw new ArgumentException("Senha hash é obrigatória.", nameof(senhaHash));
+        if (string.IsNullOrWhiteSpace(nome)) throw new ArgumentException("Nome é obrigatório.", nameof(nome));
 
-    [SensitiveData]
-    public string SenhaHash { get; set; } = string.Empty;
+        Id = Guid.NewGuid();
+        Email = new Email(email);
+        SenhaHash = senhaHash;
+        Nome = nome.Trim();
+        EmailConfirmado = false;
+    }
 
-    public string Nome { get; set; } = string.Empty;
+    public Guid Id { get; private set; }
+    public Email Email { get; private set; } = null!;
+    [SensitiveData] public string SenhaHash { get; private set; } = string.Empty;
+    public string Nome { get; private set; } = string.Empty;
+    public bool EmailConfirmado { get; private set; }
+    [SensitiveData] public string? TokenConfirmacao { get; private set; }
+    public DateTime? ExpiracaoToken { get; private set; }
+    [SensitiveData] public string? TokenRedefinicaoSenha { get; private set; }
+    public DateTime? ExpiracaoTokenRedefinicaoSenha { get; private set; }
+    public DateTime? SenhaAlteradaEm { get; private set; }
+    public int AcessosFalhos { get; private set; }
+    public DateTime? BloqueioAte { get; private set; }
+    public ICollection<VinculoUsuarioEditora> Vinculos { get; private set; } = new List<VinculoUsuarioEditora>();
 
-    public bool EmailConfirmado { get; set; }
+    public void DefinirTokenConfirmacao(string tokenHash, DateTime expiracao)
+    {
+        TokenConfirmacao = tokenHash;
+        ExpiracaoToken = expiracao;
+    }
 
-    [SensitiveData]
-    public string? TokenConfirmacao { get; set; }
-    public DateTime? ExpiracaoToken { get; set; }
+    public void ConfirmarEmail()
+    {
+        if (EmailConfirmado) throw new InvalidOperationException("E-mail já confirmado.");
+        EmailConfirmado = true;
+        TokenConfirmacao = null;
+        ExpiracaoToken = null;
+    }
 
-    [SensitiveData]
-    public string? TokenRedefinicaoSenha { get; set; }
-    public DateTime? ExpiracaoTokenRedefinicaoSenha { get; set; }
-    public DateTime? SenhaAlteradaEm { get; set; }
+    public void DefinirTokenRedefinicaoSenha(string tokenHash, DateTime expiracao)
+    {
+        TokenRedefinicaoSenha = tokenHash;
+        ExpiracaoTokenRedefinicaoSenha = expiracao;
+    }
 
-    // Account lockout tracking
-    public int AcessosFalhos { get; set; }
-    public DateTime? BloqueioAte { get; set; }
+    public void RedefinirSenha(string novaSenhaHash)
+    {
+        if (string.IsNullOrWhiteSpace(novaSenhaHash)) throw new ArgumentException("Hash da nova senha é obrigatório.", nameof(novaSenhaHash));
+        SenhaHash = novaSenhaHash;
+        SenhaAlteradaEm = DateTime.UtcNow;
+        TokenRedefinicaoSenha = null;
+        ExpiracaoTokenRedefinicaoSenha = null;
+    }
 
-    // Navigation property: all editora bindings for this user
-    public ICollection<VinculoUsuarioEditora> Vinculos { get; set; } = new List<VinculoUsuarioEditora>();
+    public void RegistrarAcessoFalho(int maxTentativas = 5, int minutosBloqueio = 15)
+    {
+        AcessosFalhos++;
+        if (AcessosFalhos >= maxTentativas)
+        {
+            BloqueioAte = DateTime.UtcNow.AddMinutes(minutosBloqueio);
+            AcessosFalhos = 0;
+        }
+    }
+
+    public void ResetarBloqueio()
+    {
+        AcessosFalhos = 0;
+        BloqueioAte = null;
+    }
+
+    public bool EstaBloqueado() => BloqueioAte.HasValue && BloqueioAte.Value > DateTime.UtcNow;
 }

@@ -80,6 +80,7 @@ services:
 
       # Frontend (CORS e links de e-mail)
       FrontendUrl: ${FRONTEND_URL}
+      AllowedOrigins: ${ALLOWEDORIGINS}
 
     depends_on:
       - postgres
