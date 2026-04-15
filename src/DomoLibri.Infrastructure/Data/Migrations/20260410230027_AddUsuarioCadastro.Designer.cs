@@ -3,6 +3,7 @@ using System;
 using DomoLibri.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
@@ -11,9 +12,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace DomoLibri.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(DomoLibriDbContext))]
-    partial class DomoLibriDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260410230027_AddUsuarioCadastro")]
+    partial class AddUsuarioCadastro
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -119,9 +122,6 @@ namespace DomoLibri.Infrastructure.Data.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTime>("DataExpiracao")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<DateTime?>("DataResposta")
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid>("EditoraId")

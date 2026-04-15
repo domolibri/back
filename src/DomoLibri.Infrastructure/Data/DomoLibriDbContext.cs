@@ -77,6 +77,7 @@ public class DomoLibriDbContext : DbContext
 
             // Index for tenant-scoped lookups
             entity.HasIndex(v => v.EditoraId);
+            entity.HasIndex(v => new { v.EditoraId, v.UsuarioId }).IsUnique();
 
             // Relationship: N:1 to global Usuario
             entity.HasOne(v => v.Usuario)

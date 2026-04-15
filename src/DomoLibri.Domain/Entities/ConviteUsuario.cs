@@ -25,6 +25,8 @@ public class ConviteUsuario
 
     public DateTime DataExpiracao { get; set; }
 
+    public DateTime? DataResposta { get; set; }
+
     public ConviteStatus Status { get; set; } = ConviteStatus.Pendente;
 
     /// <summary>The user (within the same tenant) who originated the invite.</summary>

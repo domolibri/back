@@ -48,6 +48,22 @@ public class VinculoUsuarioEditoraTests
     }
 
     [Fact]
+    public void VinculoUsuarioEditora_Criar_DefinesExpectedDefaults()
+    {
+        var usuarioId = Guid.NewGuid();
+        var editoraId = Guid.NewGuid();
+
+        var vinculo = VinculoUsuarioEditora.Criar(usuarioId, editoraId, TipoVinculo.Parceiro);
+
+        Assert.NotEqual(Guid.Empty, vinculo.Id);
+        Assert.Equal(usuarioId, vinculo.UsuarioId);
+        Assert.Equal(editoraId, vinculo.EditoraId);
+        Assert.True(vinculo.Ativo);
+        Assert.Equal(TipoVinculo.Parceiro, vinculo.TipoVinculo);
+        Assert.Equal("Ativo", vinculo.ObterStatus());
+    }
+
+    [Fact]
     public void VinculoUsuarioEditora_NavigationProperties_CanBeSet()
     {
         var editora = new Editora("Editora", "editora");
@@ -71,5 +87,7 @@ public class VinculoUsuarioEditoraTests
         Assert.Equal(0, (int)TipoVinculo.Administrador);
         Assert.Equal(1, (int)TipoVinculo.Colaborador);
         Assert.Equal(2, (int)TipoVinculo.Convidado);
+        Assert.Equal(3, (int)TipoVinculo.Interno);
+        Assert.Equal(6, (int)TipoVinculo.Parceiro);
     }
 }

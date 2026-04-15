@@ -27,4 +27,22 @@ public class VinculoUsuarioEditora
     public Usuario? Usuario { get; set; }
     public Editora? Editora { get; set; }
     public ICollection<Role> Roles { get; set; } = new List<Role>();
+
+    public static VinculoUsuarioEditora Criar(Guid usuarioId, Guid editoraId, TipoVinculo tipoVinculo)
+    {
+        if (usuarioId == Guid.Empty) throw new ArgumentException("Usuário é obrigatório.", nameof(usuarioId));
+        if (editoraId == Guid.Empty) throw new ArgumentException("Editora é obrigatória.", nameof(editoraId));
+
+        return new VinculoUsuarioEditora
+        {
+            Id = Guid.NewGuid(),
+            UsuarioId = usuarioId,
+            EditoraId = editoraId,
+            TipoVinculo = tipoVinculo,
+            Ativo = true,
+            DataEntrada = DateTime.UtcNow
+        };
+    }
+
+    public string ObterStatus() => Ativo ? "Ativo" : "Inativo";
 }

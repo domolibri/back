@@ -72,4 +72,50 @@ public class UsersController : ControllerBase
                 type: ProblemDetailsHelper.GetTypeUri(409));
         }
     }
+
+    /// <summary>
+    /// Retrieves invitation details. Public endpoint (no auth required for the token owner).
+    /// </summary>
+    [HttpGet("invite/{token}")]
+    [AllowAnonymous]
+    public async Task<IActionResult> GetInviteDetails(string token)
+    {
+        try
+        {
+            var result = await _invitationService.GetInviteDetailsAsync(token);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Problem(
+                detail: ex.Message,
+                instance: HttpContext.Request.Path,
+                statusCode: StatusCodes.Status400BadRequest,
+                title: ProblemDetailsHelper.GetTitle(400),
+                type: ProblemDetailsHelper.GetTypeUri(400));
+        }
+    }
+
+    /// <summary>
+    /// Completes the invitation. Public endpoint (no auth required).
+    /// </summary>
+    [HttpPost("invite/accept")]
+    [AllowAnonymous]
+    public async Task<IActionResult> AcceptInvite([FromBody] AcceptInviteDto request)
+    {
+        try
+        {
+            await _invitationService.AcceptInviteAsync(request);
+            return Ok(new { Message = "Convite aceito com sucesso. Agora você pode fazer login." });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Problem(
+                detail: ex.Message,
+                instance: HttpContext.Request.Path,
+                statusCode: StatusCodes.Status400BadRequest,
+                title: ProblemDetailsHelper.GetTitle(400),
+                type: ProblemDetailsHelper.GetTypeUri(400));
+        }
+    }
 }
