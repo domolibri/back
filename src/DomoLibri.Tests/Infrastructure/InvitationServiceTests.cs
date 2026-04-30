@@ -232,7 +232,7 @@ public class InvitationServiceTests
             .FirstAsync(c => c.Id == result.ConviteId);
 
         Assert.NotNull(capturedBody);
-        Assert.Contains($"/register?token={convite.Token}", capturedBody);
+        Assert.Contains($"/cadastro/convite?token={convite.Token}", capturedBody);
 
         // Token is 32 hex chars (128-bit from 16 random bytes)
         Assert.Matches("^[0-9A-F]{32}$", convite.Token);
